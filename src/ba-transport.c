@@ -903,13 +903,18 @@ static int transport_acquire_bt_sco(struct ba_transport *t) {
 		goto fail;
 	}
 
-	/* XXX: It seems, that the MTU values returned by the HCI interface
+	/* XXX: It seems, that the MTU values returned by the HCI interface for USB adapters
 	 *      are incorrect (or our interpretation of them is incorrect). */
-	t->mtu_read = 48;
-	t->mtu_write = 48;
-
-	if (t->type.codec == HFP_CODEC_MSBC)
-		t->mtu_read = t->mtu_write = 24;
+	switch (t->d->a->hci.type & 0x0f) {
+		case HCI_USB:
+			t->mtu_read = 48;
+			t->mtu_write = 48;
+			if (t->type.codec == HFP_CODEC_MSBC)
+				t->mtu_read = t->mtu_write = 24;
+			break;
+		default:
+			break;
+	}
 
 	debug("New SCO link: %s: %d (MTU: R:%zu W:%zu)", batostr_(&t->d->addr),
 			t->bt_fd, t->mtu_read, t->mtu_write);
