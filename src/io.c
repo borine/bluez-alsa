@@ -15,7 +15,7 @@
 #include <math.h>
 #include <poll.h>
 #include <pthread.h>
-#include <stdint.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <glib.h>
@@ -24,6 +24,93 @@
 #include "bluealsa.h"
 #include "shared/defs.h"
 #include "shared/log.h"
+
+/**
+ * Read data from the BT transport (SCO or SEQPACKET) socket. */
+ssize_t io_bt_read(
+		struct ba_transport *t,
+		void *buffer,
+		size_t count) {
+
+	pthread_mutex_lock(&t->bt_fd_mtx);
+
+	const int fd = t->bt_fd;
+	ssize_t ret = 0;
+
+	if (fd != -1) {
+		while ((ret = read(fd, buffer, count)) == -1 &&
+				errno == EINTR)
+			continue;
+		if (ret == -1 && (
+					errno == ECONNABORTED ||
+					errno == ECONNRESET ||
+					errno == ETIMEDOUT)) {
+			error("BT socket disconnected: %s", strerror(errno));
+			ret = 0;
+		}
+	}
+
+	pthread_mutex_unlock(&t->bt_fd_mtx);
+
+	if (ret == 0 && fd != -1) {
+		ba_transport_pcms_lock(t);
+		ba_transport_release(t);
+		ba_transport_pcms_unlock(t);
+	}
+
+	return ret;
+}
+
+/**
+ * Write data to the BT transport (SCO or SEQPACKET) socket.
+ *
+ * Note:
+ * This function may temporally re-enables thread cancellation! */
+ssize_t io_bt_write(
+		struct ba_transport *t,
+		const void *buffer,
+		size_t count) {
+
+	pthread_mutex_lock(&t->bt_fd_mtx);
+
+	ssize_t ret = 0;
+	int fd;
+
+retry:
+	if ((fd = t->bt_fd) != -1)
+		if ((ret = write(fd, buffer, count)) == -1)
+			switch (errno) {
+			case EINTR:
+				goto retry;
+			case EAGAIN:
+				/* In order to provide a way of escaping from the infinite poll()
+				 * we have to temporally re-enable thread cancellation. */
+				pthread_cleanup_push(PTHREAD_CLEANUP(pthread_mutex_unlock), &t->bt_fd_mtx);
+				pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+				struct pollfd pfd = { fd, POLLOUT, 0 };
+				poll(&pfd, 1, -1);
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+				pthread_cleanup_pop(0);
+				ret = 0;
+				goto retry;
+			case ECONNABORTED:
+			case ECONNRESET:
+			case ENOTCONN:
+			case ETIMEDOUT:
+				error("BT socket disconnected: %s", strerror(errno));
+				ret = 0;
+			}
+
+	pthread_mutex_unlock(&t->bt_fd_mtx);
+
+	if (ret == 0 && fd != -1) {
+		ba_transport_pcms_lock(t);
+		ba_transport_release(t);
+		ba_transport_pcms_unlock(t);
+	}
+
+	return ret;
+}
 
 /**
  * Scale PCM signal according to the volume configuration. */
