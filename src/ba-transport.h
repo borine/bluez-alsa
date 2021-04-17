@@ -23,7 +23,6 @@
 
 #include "a2dp.h"
 #include "ba-device.h"
-#include "ba-rfcomm.h"
 #include "bluez.h"
 
 #define BA_TRANSPORT_PROFILE_NONE        (0)
@@ -180,6 +179,9 @@ struct ba_transport {
 	 * type - it can be either A2DP or SCO link. */
 	int bt_fd;
 
+	/* if true, BT socket release was already requested */
+	bool bt_releasing;
+
 	/* max transfer unit values for bt_fd */
 	size_t mtu_read;
 	size_t mtu_write;
@@ -288,6 +290,7 @@ int ba_transport_stop(struct ba_transport *t);
 
 int ba_transport_acquire(struct ba_transport *t);
 int ba_transport_release(struct ba_transport *t);
+int ba_transport_close(struct ba_transport *t);
 
 int ba_transport_set_a2dp_state(
 		struct ba_transport *t,

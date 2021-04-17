@@ -54,7 +54,7 @@ ssize_t io_bt_read(
 
 	if (ret == 0 && fd != -1) {
 		ba_transport_pcms_lock(t);
-		ba_transport_release(t);
+		ba_transport_close(t);
 		ba_transport_pcms_unlock(t);
 	}
 
@@ -105,7 +105,7 @@ retry:
 
 	if (ret == 0 && fd != -1) {
 		ba_transport_pcms_lock(t);
-		ba_transport_release(t);
+		ba_transport_close(t);
 		ba_transport_pcms_unlock(t);
 	}
 

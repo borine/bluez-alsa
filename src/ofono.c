@@ -131,21 +131,8 @@ final:
  *
  * @return On success this function returns 0. Otherwise -1 is returned. */
 static int ofono_release_bt_sco(struct ba_transport *t) {
-
-	pthread_mutex_lock(&t->bt_fd_mtx);
-
-	if (t->bt_fd == -1)
-		goto final;
-
-	debug("Closing oFono SCO: %d", t->bt_fd);
-
-	shutdown(t->bt_fd, SHUT_RDWR);
-	close(t->bt_fd);
-	t->bt_fd = -1;
-
-final:
-	pthread_mutex_unlock(&t->bt_fd_mtx);
-	return 0;
+	debug("Releasing oFono SCO link: %d", t->bt_fd);
+	return shutdown(t->bt_fd, SHUT_RDWR);
 }
 
 /**
