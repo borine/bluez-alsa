@@ -326,6 +326,7 @@ void *sco_thread(struct ba_transport_thread *th) {
 				asrs.frames = 0;
 				continue;
 			case BA_TRANSPORT_SIGNAL_PCM_CLOSE:
+				ba_transport_pcms_lock(t);
 				/* For Audio Gateway profile it is required to release SCO if we
 				 * are not transferring audio (not sending nor receiving), because
 				 * it will free Bluetooth bandwidth - headset will send microphone
@@ -333,8 +334,9 @@ void *sco_thread(struct ba_transport_thread *th) {
 				if (t->type.profile & BA_TRANSPORT_PROFILE_MASK_AG &&
 						t->sco.spk_pcm.fd == -1 && t->sco.mic_pcm.fd == -1) {
 					debug("Releasing SCO due to PCM inactivity");
-					goto release;
+					ba_transport_release(t);
 				}
+				ba_transport_pcms_unlock(t);
 				continue;
 			case BA_TRANSPORT_SIGNAL_PCM_SYNC:
 				/* FIXME: Drain functionality for speaker.
@@ -356,7 +358,7 @@ void *sco_thread(struct ba_transport_thread *th) {
 		if (asrs.frames == 0)
 			asrsync_init(&asrs, t->sco.spk_pcm.sampling);
 
-		if (pfds[1].revents & POLLIN) {
+		if (pfds[1].revents & (POLLIN | POLLHUP)) {
 			/* dispatch incoming SCO data */
 
 			uint8_t *buffer;
@@ -403,9 +405,8 @@ void *sco_thread(struct ba_transport_thread *th) {
 				}
 
 		}
-		else if (pfds[1].revents & (POLLERR | POLLHUP)) {
-			debug("SCO poll error status: %#x", pfds[1].revents);
-			goto release;
+		else if (pfds[1].revents) {
+			error("SCO poll error: %#x", pfds[1].revents);
 		}
 
 		if (pfds[2].revents & POLLOUT) {
@@ -449,7 +450,7 @@ void *sco_thread(struct ba_transport_thread *th) {
 
 		}
 
-		if (pfds[3].revents & POLLIN) {
+		if (pfds[3].revents & (POLLIN | POLLHUP)) {
 			/* dispatch incoming PCM data */
 
 			int16_t *buffer;
@@ -490,12 +491,8 @@ void *sco_thread(struct ba_transport_thread *th) {
 			}
 
 		}
-		else if (pfds[3].revents & (POLLERR | POLLHUP)) {
-			debug("PCM poll error status: %#x", pfds[3].revents);
-			pthread_mutex_lock(&t->sco.spk_pcm.mutex);
-			ba_transport_pcm_release(&t->sco.spk_pcm);
-			ba_transport_thread_send_signal(th, BA_TRANSPORT_SIGNAL_PCM_CLOSE);
-			pthread_mutex_unlock(&t->sco.spk_pcm.mutex);
+		else if (pfds[3].revents) {
+			error("PCM poll error: %#x", pfds[3].revents);
 		}
 
 		if (pfds[4].revents & POLLOUT) {
@@ -559,12 +556,6 @@ void *sco_thread(struct ba_transport_thread *th) {
 		const unsigned int delay = asrsync_get_busy_usec(&asrs) / 100;
 		t->sco.spk_pcm.delay = t->sco.mic_pcm.delay = delay;
 
-		continue;
-
-release:
-		ba_transport_pcms_lock(t);
-		ba_transport_release(t);
-		ba_transport_pcms_unlock(t);
 	}
 
 fail:
