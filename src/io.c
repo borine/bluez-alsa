@@ -22,6 +22,7 @@
 
 #include "audio.h"
 #include "bluealsa.h"
+#include "bluealsa-pcm-multi.h"
 #include "shared/defs.h"
 #include "shared/log.h"
 
@@ -176,9 +177,7 @@ ssize_t io_pcm_flush(struct ba_transport_pcm *pcm) {
 	return rv;
 }
 
-/**
- * Read PCM signal from the transport PCM FIFO. */
-ssize_t io_pcm_read(
+static ssize_t io_pcm_single_read(
 		struct ba_transport_pcm *pcm,
 		void *buffer,
 		size_t samples) {
@@ -210,11 +209,19 @@ ssize_t io_pcm_read(
 }
 
 /**
- * Write PCM signal to the transport PCM FIFO.
- *
- * Note:
- * This function may temporally re-enables thread cancellation! */
-ssize_t io_pcm_write(
+ * Read PCM signal from the transport PCM FIFO. */
+ssize_t io_pcm_read(
+		struct ba_transport_pcm *pcm,
+		void *buffer,
+		size_t samples) {
+
+	if (bluealsa_pcm_multi_enabled(pcm))
+		return bluealsa_pcm_multi_read(pcm->multi, buffer, samples);
+	else
+		return io_pcm_single_read(pcm, buffer, samples);
+}
+
+static ssize_t io_pcm_single_write(
 		struct ba_transport_pcm *pcm,
 		const void *buffer,
 		size_t samples) {
@@ -267,4 +274,21 @@ ssize_t io_pcm_write(
 final:
 	pthread_mutex_unlock(&pcm->mutex);
 	return ret;
+}
+
+/**
+ * Write PCM signal to the transport PCM FIFO.
+ *
+ * Note:
+ * This function may temporally re-enables thread cancellation! */
+ssize_t io_pcm_write(
+		struct ba_transport_pcm *pcm,
+		const void *buffer,
+		size_t samples) {
+	if (bluealsa_pcm_multi_enabled(pcm)) {
+		bluealsa_pcm_multi_write(pcm->multi, buffer, samples);
+		return samples;
+	}
+	else
+		return io_pcm_single_write(pcm, buffer, samples);
 }

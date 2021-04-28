@@ -23,6 +23,7 @@
 
 #include "a2dp.h"
 #include "ba-device.h"
+#include "bluealsa-pcm-multi.h"
 #include "bluez.h"
 
 #define BA_TRANSPORT_PROFILE_NONE        (0)
@@ -104,6 +105,9 @@ struct ba_transport_pcm {
 
 	/* FIFO file descriptor */
 	int fd;
+
+	/* Multi-client stream support */
+	struct bluealsa_pcm_multi *multi;
 
 	/* 16-bit stream format identifier */
 	uint16_t format;
