@@ -71,8 +71,7 @@ bool bluealsa_pcm_multi_enabled(struct ba_transport_pcm *pcm) {
 		return pcm->t->a2dp.pcm.format != BA_TRANSPORT_PCM_FORMAT_S24_3LE &&
                     pcm->t->a2dp.pcm.format != BA_TRANSPORT_PCM_FORMAT_S24_4LE;
 
-	/* multi-client not yet enabled for SCO */
-	return false;
+	return true;
 }
 
 /**
