@@ -157,6 +157,8 @@ enum ba_transport_thread_state {
 struct ba_transport_thread {
 	/* backward reference to transport */
 	struct ba_transport *t;
+	/* indicates a master thread */
+	bool master;
 	/* guard thread structure */
 	pthread_mutex_t mutex;
 	/* current state of the thread */
@@ -332,7 +334,8 @@ int ba_transport_pcm_release(struct ba_transport_pcm *pcm);
 int ba_transport_thread_create(
 		struct ba_transport_thread *th,
 		void *(*routine)(struct ba_transport_thread *),
-		const char *name);
+		const char *name,
+		bool master);
 
 int ba_transport_thread_set_state(
 		struct ba_transport_thread *th,
