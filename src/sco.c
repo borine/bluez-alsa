@@ -231,8 +231,48 @@ void *sco_thread(struct ba_transport_thread *th) {
 		goto fail_ffb;
 	}
 
-	int poll_timeout = -1;
 	struct ba_transport *t = th->t;
+
+	/* start multi client threads if required. */
+	if (t->sco.spk_pcm.multi) {
+		bool init_ok = false;
+		switch (t->type.codec) {
+		case HFP_CODEC_CVSD:
+		default:
+			init_ok = bluealsa_pcm_multi_init(t->sco.spk_pcm.multi,
+					bt_out.nmemb / sizeof(int16_t));
+			break;
+		#if ENABLE_MSBC
+		case HFP_CODEC_MSBC:
+			init_ok = bluealsa_pcm_multi_init(t->sco.spk_pcm.multi,
+					msbc_enc.pcm.nmemb);
+			break;
+		#endif
+		}
+		if (!init_ok)
+			goto fail_ffb;
+	}
+
+	if (t->sco.mic_pcm.multi) {
+		bool init_ok = false;
+		switch (t->type.codec) {
+		case HFP_CODEC_CVSD:
+		default:
+			init_ok = bluealsa_pcm_multi_init(t->sco.mic_pcm.multi,
+					bt_in.nmemb / sizeof(int16_t));
+			break;
+		#if ENABLE_MSBC
+		case HFP_CODEC_MSBC:
+			init_ok = bluealsa_pcm_multi_init(t->sco.mic_pcm.multi,
+					msbc_dec.pcm.nmemb);
+			break;
+		#endif
+		}
+		if (!init_ok)
+			goto fail_ffb;
+	}
+
+	int poll_timeout = -1;
 	struct asrsync asrs = { .frames = 0 };
 	struct pollfd pfds[] = {
 		{ th->pipe[0], POLLIN, 0 },

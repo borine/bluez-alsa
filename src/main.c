@@ -1,6 +1,6 @@
 /*
  * BlueALSA - main.c
- * Copyright (c) 2016-2020 Arkadiusz Bokowy
+ * Copyright (c) 2016-2021 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -90,12 +90,13 @@ static void dbus_name_lost(GDBusConnection *conn, const char *name, void *userda
 int main(int argc, char **argv) {
 
 	int opt;
-	const char *opts = "hVB:Si:p:";
+	const char *opts = "hVB:SMi:p:";
 	const struct option longopts[] = {
 		{ "help", no_argument, NULL, 'h' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "dbus", required_argument, NULL, 'B' },
 		{ "syslog", no_argument, NULL, 'S' },
+		{ "multi-client", no_argument, NULL, 'M' },
 		{ "device", required_argument, NULL, 'i' },
 		{ "profile", required_argument, NULL, 'p' },
 		{ "initial-volume", required_argument, NULL, 17 },
@@ -158,6 +159,7 @@ int main(int argc, char **argv) {
 					"  -h, --help\t\tprint this help and exit\n"
 					"  -V, --version\t\tprint version and exit\n"
 					"  -B, --dbus=NAME\tD-Bus service name suffix\n"
+					"  -M, --multi-client\t\tpermit multiple clients for each transport PCM\n"
 					"  -S, --syslog\t\tsend output to syslog\n"
 					"  -i, --device=hciX\tHCI device(s) to use\n"
 					"  -p, --profile=NAME\tenable BT profile\n"
@@ -207,6 +209,10 @@ int main(int argc, char **argv) {
 
 		case 'B' /* --dbus=NAME */ :
 			snprintf(dbus_service, sizeof(dbus_service), BLUEALSA_SERVICE ".%s", optarg);
+			break;
+
+		case 'M' /* --multi-client */ :
+			config.multi_enabled = true;
 			break;
 
 		case 'S' /* --syslog */ :

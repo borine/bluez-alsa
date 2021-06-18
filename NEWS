@@ -1,5 +1,6 @@
 unreleased
 ==========
+- support for multiple clients for each PCM
 
 bluez-alsa v3.1.0 (2021-06-01)
 ==============================

@@ -69,7 +69,7 @@ ssize_t io_pcm_read(
 
 ssize_t io_pcm_write(
 		struct ba_transport_pcm *pcm,
-		const void *buffer,
+		void *buffer,
 		size_t samples);
 
 ssize_t io_poll_and_read_bt(

@@ -1,6 +1,6 @@
 /*
  * BlueALSA - bluealsa.c
- * Copyright (c) 2016-2020 Arkadiusz Bokowy
+ * Copyright (c) 2016-2021 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -33,6 +33,8 @@ struct ba_config config = {
 	.device_seq = 0,
 
 	.null_fd = -1,
+
+	.multi_enabled = false,
 
 	.volume_init_level = 0,
 

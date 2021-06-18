@@ -21,6 +21,7 @@
 #include <glib.h>
 
 #include "audio.h"
+#include "bluealsa-pcm-multi.h"
 #include "bluealsa.h"
 #include "shared/defs.h"
 #include "shared/log.h"
@@ -165,7 +166,7 @@ ssize_t io_pcm_flush(struct ba_transport_pcm *pcm) {
 
 /**
  * Read PCM signal from the transport PCM FIFO. */
-ssize_t io_pcm_read(
+static ssize_t io_pcm_single_read(
 		struct ba_transport_pcm *pcm,
 		void *buffer,
 		size_t samples) {
@@ -199,11 +200,23 @@ ssize_t io_pcm_read(
 }
 
 /**
+ * Read PCM signal from the transport PCM FIFO or mix as appropriate. */
+ssize_t io_pcm_read(
+		struct ba_transport_pcm *pcm,
+		void *buffer,
+		size_t samples) {
+	if (pcm->multi)
+		return bluealsa_pcm_multi_read(pcm->multi, buffer, samples);
+	else
+		return io_pcm_single_read(pcm, buffer, samples);
+}
+
+/**
  * Write PCM signal to the transport PCM FIFO.
  *
  * Note:
  * This function may temporally re-enable thread cancellation! */
-ssize_t io_pcm_write(
+static ssize_t io_pcm_single_write(
 		struct ba_transport_pcm *pcm,
 		const void *buffer,
 		size_t samples) {
@@ -258,6 +271,43 @@ ssize_t io_pcm_write(
 final:
 	pthread_mutex_unlock(&pcm->mutex);
 	return ret;
+}
+
+/**
+ * Copy PCM samples to multiple clients.
+ *
+ * This function is non-blocking */
+static ssize_t io_pcm_multi_write(
+		struct ba_transport_pcm *pcm,
+		void *buffer,
+		size_t samples) {
+
+	pthread_mutex_lock(&pcm->mutex);
+
+	/* Scale volume or mute audio signal. */
+	io_pcm_scale(pcm, buffer, samples);
+
+	bluealsa_pcm_multi_write(pcm->multi, buffer, samples);
+
+	pthread_mutex_unlock(&pcm->mutex);
+
+	return samples;
+}
+
+/**
+ * Write samples to PCM.
+ *
+ * Selects either multi sink or direct client FIFO depending on whether
+ * multi client support is enabled. */
+ssize_t io_pcm_write(
+		struct ba_transport_pcm *pcm,
+		void *buffer,
+		size_t samples) {
+
+	if (pcm->multi == NULL)
+		return io_pcm_single_write(pcm, buffer, samples);
+	else
+		return io_pcm_multi_write(pcm, buffer, samples);
 }
 
 static enum ba_transport_signal io_poll_signal_filter_none(
@@ -399,3 +449,4 @@ repoll:
 
 	return samples_read;
 }
+

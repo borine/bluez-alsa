@@ -46,6 +46,7 @@
 #include "a2dp.h"
 #include "a2dp-codecs.h"
 #include "a2dp-rtp.h"
+#include "bluealsa-pcm-multi.h"
 #include "bluealsa.h"
 #if ENABLE_APTX || ENABLE_APTX_HD
 # include "codec-aptx.h"
@@ -226,6 +227,11 @@ static void *a2dp_sink_sbc(struct ba_transport_thread *th) {
 		goto fail_ffb;
 	}
 
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
+
 #if DEBUG
 	uint16_t sbc_bitpool = 0;
 #endif
@@ -347,6 +353,11 @@ static void *a2dp_source_sbc(struct ba_transport_thread *th) {
 		error("Couldn't create data buffers: %s", strerror(errno));
 		goto fail_ffb;
 	}
+
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
 
 	rtp_header_t *rtp_header;
 	rtp_media_header_t *rtp_media_header;
@@ -523,6 +534,11 @@ static void *a2dp_sink_mpeg(struct ba_transport_thread *th) {
 		error("Couldn't create data buffers: %s", strerror(errno));
 		goto fail_ffb;
 	}
+
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
 
 	debug_transport_thread_loop(th, "START");
 	for (ba_transport_thread_set_state_running(th);;) {
@@ -736,6 +752,11 @@ static void *a2dp_source_mp3(struct ba_transport_thread *th) {
 		goto fail_ffb;
 	}
 
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
+
 	rtp_header_t *rtp_header;
 	rtp_mpeg_audio_header_t *rtp_mpeg_audio_header;
 
@@ -896,6 +917,11 @@ static void *a2dp_sink_aac(struct ba_transport_thread *th) {
 		error("Couldn't create data buffers: %s", strerror(errno));
 		goto fail_ffb;
 	}
+
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
 
 	int markbit_quirk = -3;
 
@@ -1099,6 +1125,11 @@ static void *a2dp_source_aac(struct ba_transport_thread *th) {
 		goto fail_ffb;
 	}
 
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
+
 	rtp_header_t *rtp_header;
 
 	/* initialize RTP header and get anchor for payload */
@@ -1254,6 +1285,11 @@ static void *a2dp_sink_aptx(struct ba_transport_thread *th) {
 		goto fail_ffb;
 	}
 
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
+
 	debug_transport_thread_loop(th, "START");
 	for (ba_transport_thread_set_state_running(th);;) {
 
@@ -1342,6 +1378,11 @@ static void *a2dp_source_aptx(struct ba_transport_thread *th) {
 		error("Couldn't create data buffers: %s", strerror(errno));
 		goto fail_ffb;
 	}
+
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
 
 	debug_transport_thread_loop(th, "START");
 	for (ba_transport_thread_set_state_running(th);;) {
@@ -1459,6 +1500,11 @@ static void *a2dp_sink_aptx_hd(struct ba_transport_thread *th) {
 		goto fail_ffb;
 	}
 
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
+
 	debug_transport_thread_loop(th, "START");
 	for (ba_transport_thread_set_state_running(th);;) {
 
@@ -1551,6 +1597,11 @@ static void *a2dp_source_aptx_hd(struct ba_transport_thread *th) {
 		error("Couldn't create data buffers: %s", strerror(errno));
 		goto fail_ffb;
 	}
+
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
 
 	rtp_header_t *rtp_header;
 
@@ -1692,6 +1743,11 @@ static void *a2dp_sink_ldac(struct ba_transport_thread *th) {
 		goto fail_ffb;
 	}
 
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
+
 	debug_transport_thread_loop(th, "START");
 	for (ba_transport_thread_set_state_running(th);;) {
 
@@ -1810,6 +1866,11 @@ static void *a2dp_source_ldac(struct ba_transport_thread *th) {
 		error("Couldn't create data buffers: %s", strerror(errno));
 		goto fail_ffb;
 	}
+
+	/* start multi client thread if required. */
+	if (t->a2dp.pcm.multi &&
+	                  !bluealsa_pcm_multi_init(t->a2dp.pcm.multi, pcm.nmemb))
+		goto fail_ffb;
 
 	rtp_header_t *rtp_header;
 	rtp_media_header_t *rtp_media_header;

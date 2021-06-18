@@ -37,6 +37,12 @@ OPTIONS
     Without this option, **bluealsa** registers itself as an "org.bluealsa" D-Bus service.
     For more information see the EXAMPLE_ below.
 
+-M, --multi-client
+    Permit multiple clients to connect to the same PCM stream.
+    Without this option, only one client can connect to a PCM.
+    With this option, for playback clients, the streams are mixed together;
+    for capture each client receives a copy of the stream.
+
 -S, --syslog
     Send output to system logger (``syslogd(8)``).
     By default, log output is sent to stderr.

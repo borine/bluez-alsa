@@ -1,6 +1,6 @@
 /*
  * BlueALSA - bluealsa.h
- * Copyright (c) 2016-2019 Arkadiusz Bokowy
+ * Copyright (c) 2016-2021 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -58,6 +58,9 @@ struct ba_config {
 
 	/* opened null device */
 	int null_fd;
+
+	/* Is multi client support enabled? */
+	bool multi_enabled;
 
 	/* the initial volume level */
 	int volume_init_level;

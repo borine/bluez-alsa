@@ -1,6 +1,6 @@
 /*
  * test-ba.c
- * Copyright (c) 2016-2020 Arkadiusz Bokowy
+ * Copyright (c) 2016-2021 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -19,6 +19,9 @@
 #include "../src/ba-adapter.c"
 #include "../src/ba-device.c"
 #include "../src/ba-transport.c"
+#include "../src/bluealsa-mix-buffer.c"
+#include "../src/bluealsa-pcm-client.c"
+#include "../src/bluealsa-pcm-multi.c"
 #include "../src/bluealsa.c"
 #include "../src/dbus.c"
 #include "../src/hci.c"
