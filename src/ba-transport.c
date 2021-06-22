@@ -145,14 +145,16 @@ static void transport_thread_cancel_prepare(struct ba_transport_thread *th) {
  * terminate, so join will not return either! */
 static void transport_thread_cancel(struct ba_transport_thread *th) {
 
-	if (pthread_equal(th->id, config.main_thread) ||
-			pthread_equal(th->id, pthread_self()))
+	pthread_t id = th->id;
+
+	if (pthread_equal(id, config.main_thread) ||
+			pthread_equal(id, pthread_self()))
 		return;
 
 	int err;
-	if ((err = pthread_cancel(th->id)) != 0 && err != ESRCH)
+	if ((err = pthread_cancel(id)) != 0 && err != ESRCH)
 		warn("Couldn't cancel transport thread: %s", strerror(err));
-	if ((err = pthread_join(th->id, NULL)) != 0)
+	if ((err = pthread_join(id, NULL)) != 0)
 		warn("Couldn't join transport thread: %s", strerror(err));
 
 	/* Indicate that the thread has been successfully terminated. Also,
@@ -889,11 +891,82 @@ int ba_transport_stop(struct ba_transport *t) {
 	return 0;
 }
 
+static gboolean transport_threads_cancel_callback(void *userdata) {
+	struct ba_transport *t = userdata;
+
+	transport_thread_cancel(&t->thread_enc);
+	transport_thread_cancel(&t->thread_dec);
+
+	t->stopping = false;
+
+	return FALSE;
+}
+
+int ba_transport_stop_if_inactive(struct ba_transport *t) {
+
+	/* Hold PCM locks, so no client will open a PCM in
+	 * the middle of our PCM inactivity check. */
+	ba_transport_pcms_lock(t);
+
+	/* Hold BT lock, because we are going to modify
+	 * the IO transports stopping flag. */
+	pthread_mutex_lock(&t->bt_fd_mtx);
+
+	bool stop = false;
+
+	if (t->stopping)
+		goto final;
+
+	switch (t->type.profile) {
+	case BA_TRANSPORT_PROFILE_A2DP_SOURCE:
+		/* Release bidirectional A2DP transport only in case when there
+		 * is no active PCM connection - neither encoder nor decoder. */
+		if (t->a2dp.pcm.fd == -1 && t->a2dp.pcm_bc.fd == -1)
+			t->stopping = stop = true;
+		break;
+	case BA_TRANSPORT_PROFILE_HFP_AG:
+	case BA_TRANSPORT_PROFILE_HSP_AG:
+		/* For Audio Gateway profile it is required to release SCO if we
+		 * are not transferring audio (not sending nor receiving), because
+		 * it will free Bluetooth bandwidth - headset will send microphone
+		 * signal even though we are not reading it! */
+		if (t->sco.spk_pcm.fd == -1 && t->sco.mic_pcm.fd == -1)
+			t->stopping = stop = true;
+		break;
+	}
+
+	if (stop) {
+		debug("Stopping transport: %s", "No PCM clients");
+		transport_thread_cancel_prepare(&t->thread_enc);
+		transport_thread_cancel_prepare(&t->thread_dec);
+	}
+
+final:
+	pthread_mutex_unlock(&t->bt_fd_mtx);
+	ba_transport_pcms_unlock(t);
+
+	if (stop) {
+		/* Delegate transport IO threads cancellations to main glib
+		 * thread. Calling transport_thread_cancel() here would result
+		 * in encoder IO thread trying to join decoder, while decoder
+		 * IO thread trying to join encoder... deadlock. */
+		g_idle_add(transport_threads_cancel_callback, t);
+	}
+
+	return 0;
+}
+
 int ba_transport_acquire(struct ba_transport *t) {
 
 	int fd = -1;
 
 	pthread_mutex_lock(&t->bt_fd_mtx);
+
+	if (t->stopping) {
+		debug("Couldn't acquire transport: %s", "Stopping in progress");
+		errno = EAGAIN;
+		goto final;
+	}
 
 	/* If BT socket file descriptor is still valid, we
 	 * can safely reuse it (e.g. in a keep-alive mode). */
