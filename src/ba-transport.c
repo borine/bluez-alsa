@@ -529,7 +529,7 @@ void ba_transport_destroy(struct ba_transport *t) {
 		t->sco.rfcomm = NULL;
 	}
 
-	/* stop IO threads */
+	/* stop transport IO threads */
 	ba_transport_stop(t);
 
 	ba_transport_pcms_lock(t);
@@ -686,13 +686,13 @@ int ba_transport_select_codec_sco(
 		struct ba_rfcomm * const r = t->sco.rfcomm;
 		pthread_mutex_lock(&r->codec_selection_completed_mtx);
 
-		ba_transport_pcms_lock(t);
+		/* stop transport IO threads */
+		ba_transport_stop(t);
 
-		/* release ongoing connection */
+		ba_transport_pcms_lock(t);
+		/* release ongoing PCM connections */
 		ba_transport_pcm_release(&t->sco.spk_pcm);
 		ba_transport_pcm_release(&t->sco.mic_pcm);
-		ba_transport_release(t);
-
 		ba_transport_pcms_unlock(t);
 
 		switch (codec_id) {
@@ -975,10 +975,18 @@ int ba_transport_acquire(struct ba_transport *t) {
 		goto final;
 	}
 
+	/* Call transport specific acquire callback. */
 	fd = t->acquire(t);
 
 final:
 	pthread_mutex_unlock(&t->bt_fd_mtx);
+
+	/* For SCO profiles we can start transport IO threads right away. There
+	 * is no asynchronous signaling from BlueZ like with A2DP profiles. */
+	if (t->type.profile & BA_TRANSPORT_PROFILE_MASK_SCO
+			&& fd != -1)
+		ba_transport_start(t);
+
 	return fd;
 }
 
@@ -1219,7 +1227,7 @@ int ba_transport_thread_bt_acquire(
 	pthread_mutex_lock(&t->bt_fd_mtx);
 
 	const int bt_fd = t->bt_fd;
-	if (bt_fd != -1 && th->bt_fd == -1) {
+	if (th->bt_fd == -1) {
 		if ((th->bt_fd = dup(bt_fd)) != -1)
 			debug("Created BT socket duplicate [%d]: %d", bt_fd, th->bt_fd);
 		else {
