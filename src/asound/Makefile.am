@@ -1,11 +1,13 @@
 # BlueALSA - Makefile.am
 # Copyright (c) 2016-2021 Arkadiusz Bokowy
 
-EXTRA_DIST = 20-bluealsa.conf
+EXTRA_DIST = 20-bluealsa.conf alsa-dynamic.conf
 
 asound_module_ctl_LTLIBRARIES = libasound_module_ctl_bluealsa.la
 asound_module_pcm_LTLIBRARIES = libasound_module_pcm_bluealsa.la
-asound_module_conf_DATA = 20-bluealsa.conf
+asound_module_conf_LTLIBRARIES = libasound_module_conf_bluealsa.la
+asound_conf_DATA = 20-bluealsa.conf
+bluealsa_conf_DATA = alsa-dynamic.conf
 
 libasound_module_ctl_bluealsa_la_SOURCES = \
 	../shared/a2dp-codecs.c \
@@ -18,10 +20,18 @@ libasound_module_pcm_bluealsa_la_SOURCES = \
 	../shared/log.c \
 	../shared/rt.c \
 	bluealsa-pcm.c
+libasound_module_conf_bluealsa_la_SOURCES = \
+	../shared/dbus-client.c \
+	../shared/log.c \
+	../../utils/aplay/dbus.c \
+	bluealsa-conf.c
 
 asound_module_ctldir = @ALSA_PLUGIN_DIR@
 asound_module_pcmdir = @ALSA_PLUGIN_DIR@
-asound_module_confdir = @ALSA_CONF_DIR@
+asound_module_confdir = @ALSA_PLUGIN_DIR@
+asound_confdir = @ALSA_CONF_DIR@
+
+bluealsa_confdir = @BLUEALSA_DATA_DIR@
 
 AM_CFLAGS = \
 	-I$(top_srcdir)/src \
@@ -38,5 +48,11 @@ libasound_module_ctl_bluealsa_la_LIBADD = \
 	@DBUS1_LIBS@
 libasound_module_pcm_bluealsa_la_LIBADD = \
 	@ALSA_LIBS@ \
+	@BLUEZ_LIBS@ \
+	@DBUS1_LIBS@ \
+	@LIBUNWIND_LIBS@
+libasound_module_conf_bluealsa_la_LIBADD = \
+	@ALSA_LIBS@ \
+	@BLUEZ_LIBS@ \
 	@DBUS1_LIBS@ \
 	@LIBUNWIND_LIBS@

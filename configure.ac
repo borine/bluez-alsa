@@ -308,6 +308,12 @@ AC_ARG_WITH([systemdsystemunitdir],
 	[systemdsystemunitdir=$($PKG_CONFIG --variable=systemdsystemunitdir systemd)])])
 AC_SUBST([SYSTEMD_SYSTEM_UNIT_DIR], [$systemdsystemunitdir])
 
+AC_ARG_WITH([bluealsadatadir],
+	AS_HELP_STRING([--with-bluealsa-datadir=DIR], [path to BlueALSA data files]),
+	[bluealsadatadir="${withval}"],
+	[bluealsadatadir="$datadir/bluealsa"])
+AC_SUBST([BLUEALSA_DATA_DIR], [$bluealsadatadir])
+
 AC_CONFIG_FILES([
 	Makefile
 	doc/Makefile
