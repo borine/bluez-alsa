@@ -282,13 +282,16 @@ eval alsaconfdir="$alsaconfdir"
 eval alsaconfdir="$alsaconfdir"
 eval alsaplugindir="$alsaplugindir"
 eval alsaplugindir="$alsaplugindir"
+eval bluealsa_datadir="$datadir/bluealsa"
 
 AC_DEFINE_UNQUOTED([ALSA_CONF_DIR], "$alsaconfdir", [Directory containing ALSA add-on configuration files.])
 AC_DEFINE_UNQUOTED([ALSA_PLUGIN_DIR], "$alsaplugindir", [Directory containing ALSA add-on modules.])
+AC_DEFINE_UNQUOTED([BLUEALSA_DATA_DIR], "$bluealsa_datadir", [Directory containing BlueALSA data files.])
 
 AC_SUBST([DBUS_CONF_DIR], [$dbusconfdir])
 AC_SUBST([ALSA_CONF_DIR], [$alsaconfdir])
 AC_SUBST([ALSA_PLUGIN_DIR], [$alsaplugindir])
+AC_SUBST([BLUEALSA_DATA_DIR], [$bluealsa_datadir])
 AC_SUBST([BASH_COMPLETION_DIR], [$bashcompdir])
 
 AC_CONFIG_FILES([
