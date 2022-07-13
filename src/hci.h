@@ -25,6 +25,7 @@
 
 #define BT_COMPID_INTEL              0x0002
 #define BT_COMPID_QUALCOMM_TECH_INTL 0x000A
+#define BT_COMPID_TEXAS_INSTRUMENTS  0x000D
 #define BT_COMPID_BROADCOM           0x000F
 #define BT_COMPID_APPLE              0x004C
 #define BT_COMPID_APT                0x004F
@@ -71,6 +72,8 @@ int hci_bcm_read_sco_pcm_params(int dd, uint8_t *routing, uint8_t *clock,
 		uint8_t *frame, uint8_t *sync, uint8_t *clk, int to);
 int hci_bcm_write_sco_pcm_params(int dd, uint8_t routing, uint8_t clock,
 		uint8_t frame, uint8_t sync, uint8_t clk, int to);
+
+int hci_ti_write_sco_config(int dd, int to);
 
 const char *batostr_(const bdaddr_t *ba);
 

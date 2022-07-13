@@ -222,6 +222,47 @@ int hci_bcm_write_sco_pcm_params(int dd, uint8_t routing, uint8_t clock,
 }
 
 /**
+ * Texas Instruments vendor HCI command for writing SCO routing configuration. */
+int hci_ti_write_sco_config(int dd, int to) {
+
+	/* see https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/538/47427.CC256x-VS-HCI-Commands-_2D00_-Texas-Instruments-Wiki.pdf */
+
+	struct __attribute__ ((packed)) {
+		uint8_t connection_type;
+		uint8_t tx_buffer_size;
+		uint8_t tx_max_buffer_latency_ls_byte;
+		uint8_t tx_max_buffer_latency_ms_byte;
+		uint8_t accept_bad_crc;
+	} cp = {
+		0x01, /* route to HCI */
+		0x00, /* no change */
+		0x00, /* no change */
+		0x00,
+		0xff  /* no change */
+	};
+	uint8_t rp_status;
+
+	struct hci_request rq = {
+		.ogf = OGF_VENDOR_CMD,
+		.ocf = 0x0210,
+		.cparam = &cp,
+		.clen = sizeof(cp),
+		.rparam = &rp_status,
+		.rlen = sizeof(rp_status),
+	};
+
+	if (hci_send_req(dd, &rq, to) < 0)
+		return -1;
+
+	if (rp_status) {
+		errno = EIO;
+		return -1;
+	}
+
+	return 0;
+}
+
+/**
  * Convert Bluetooth address into a human-readable string.
  *
  * This function returns statically allocated buffer. It is not by any means

@@ -188,6 +188,22 @@ int sco_setup_connection_dispatcher(struct ba_adapter *a) {
 			hci_close_dev(dd);
 
 	}
+	else if (a->chip.manufacturer == BT_COMPID_TEXAS_INSTRUMENTS) {
+		int dd;
+		debug("Checking Texas Instruments internal SCO routing");
+
+		if ((dd = hci_open_dev(a->hci.dev_id)) == -1)
+			error("Couldn't open device: %s", strerror(errno));
+		else {
+			debug("Setting SCO routing via transport interface");
+			if (hci_ti_write_sco_config(dd, 1000) == -1)
+			error("Couldn't write SCO routing params: %s", strerror(errno));
+		}
+
+		if (dd != -1)
+			hci_close_dev(dd);
+
+	}
 
 	int ret;
 
