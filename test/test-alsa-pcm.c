@@ -287,7 +287,7 @@ CK_START_TEST(test_capture_pause) {
 		ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_RUNNING);
 
 		/* wait a little bit */
-		usleep(period_time);
+		usleep(3 * period_time / 2);
 
 		/* check resume: more available frames, bigger delay */
 		ck_assert_int_gt(snd_pcm_avail(pcm), frames0);

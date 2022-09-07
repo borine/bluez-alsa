@@ -1,6 +1,6 @@
 /*
  * bluealsa-pcm.c
- * Copyright (c) 2016-2022 Arkadiusz Bokowy
+ * Copyright (c) 2016-2023 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -28,6 +28,7 @@
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
+#include <sys/param.h>
 #include <unistd.h>
 
 #include <alsa/asoundlib.h>
@@ -41,9 +42,10 @@
 #include "shared/log.h"
 #include "shared/rt.h"
 
-#define BA_PAUSE_STATE_RUNNING 0
-#define BA_PAUSE_STATE_PAUSED  (1 << 0)
-#define BA_PAUSE_STATE_PENDING (1 << 1)
+#define BA_PAUSE_STATE_INIT 0
+#define BA_PAUSE_STATE_RUNNING (1 << 0)
+#define BA_PAUSE_STATE_PAUSED  (1 << 1)
+#define BA_PAUSE_STATE_PENDING (1 << 2)
 
 #if SND_LIB_VERSION >= 0x010104
 /**
@@ -118,6 +120,8 @@ struct bluealsa_pcm {
 	pthread_cond_t pause_cond;
 	unsigned int pause_state;
 
+	/* /dev/null used by capture PCMs to clear stale data from FIFO. */
+	int null_fd;
 };
 
 /**
@@ -167,21 +171,23 @@ static void io_thread_cleanup(struct bluealsa_pcm *pcm) {
 }
 
 /**
- * Helper function for IO thread delay calculation. */
-static void io_thread_update_delay(struct bluealsa_pcm *pcm,
+ * Helper function synchronizes updating of HW pointer value with IO thread
+ * delay calculation. */
+static void io_thread_update_hw_ptr(struct bluealsa_pcm *pcm,
 		snd_pcm_sframes_t hw_ptr) {
 
 	struct timespec now;
-	unsigned int nread = 0;
-
 	gettimestamp(&now);
-	ioctl(pcm->ba_pcm_fd, FIONREAD, &nread);
 
 	pthread_mutex_lock(&pcm->mutex);
 
 	/* stash current time and levels */
 	pcm->delay_ts = now;
-	pcm->delay_pcm_nread = nread;
+	if (pcm->io.stream == SND_PCM_STREAM_PLAYBACK) {
+		unsigned int nread = 0;
+		ioctl(pcm->ba_pcm_fd, FIONREAD, &nread);
+		pcm->delay_pcm_nread = nread;
+	}
 	if (hw_ptr == -1) {
 		pcm->delay_hw_ptr = 0;
 		if (pcm->io.stream == SND_PCM_STREAM_PLAYBACK)
@@ -193,8 +199,147 @@ static void io_thread_update_delay(struct bluealsa_pcm *pcm,
 			pcm->delay_running = true;
 	}
 
+	/* Make the new HW pointer value visible to the ioplug. */
+	pcm->io_hw_ptr = hw_ptr;
+
 	pthread_mutex_unlock(&pcm->mutex);
 
+}
+
+static void frames_to_timespec(struct timespec *ts, snd_pcm_uframes_t frames, unsigned int rate) {
+	ts->tv_sec = frames / rate;
+	ts->tv_nsec = 1000000000L / rate * (frames % rate);
+}
+
+static void insert_silence(char *buf, snd_pcm_uframes_t frames, int format, int channels) {
+	snd_pcm_format_set_silence(format, buf, frames * channels);
+}
+
+/**
+ * Transfer a chunk of audio frames from the FIFO to the ALSA buffer.
+ * The whole chunk is read "atomically" to ensure that frames are not
+ * fragmented, so the hw pointer can be correctly updated.
+ * Regulates the average rate at which frames are transferred, and inserts
+ * intervals of silence into the stream if necessary to maintain the rate.
+ * @return true if transfer completed successfully, false if error occurred. */
+static bool io_thread_read(struct bluealsa_pcm *pcm, char *buffer, snd_pcm_uframes_t frames, struct asrsync *asrs, int *fifo_active) {
+	/* count of frames added to buffer in this call */
+	snd_pcm_uframes_t tframes = 0;
+	char *pos = buffer;
+	size_t len = frames * pcm->frame_size;
+	struct timespec deadline, now, temp, timeout;
+	int pollret;
+
+	/* Set a deadline for this transfer to complete. */
+	frames_to_timespec(&temp, frames + asrs->frames, pcm->io.rate);
+	timespecadd(&temp, &asrs->ts0, &deadline);
+	if (difftimespec(&deadline, &asrs->ts, &timeout) > 0) {
+		/* we have already exceeded the time allowance for this read */
+		debug2("I/O thread too slow to maintain rate, lost sync");
+		return false;
+	}
+
+	/* temporarily block all signals to prevent interruptions to timer */
+	sigset_t sigset_all, sigset_old;
+	sigfillset(&sigset_all);
+	if ((errno = pthread_sigmask(SIG_BLOCK, &sigset_all, &sigset_old)) != 0) {
+		SNDERR("Thread signal mask error: %s", strerror(errno));
+		return false;
+	}
+
+	struct pollfd pfd = { pcm->ba_pcm_fd, POLLIN, 0 };
+
+	while (tframes < frames) {
+		pollret = ppoll(&pfd, 1, &timeout, NULL);
+		if (pollret == -1) {
+			SNDERR("PCM FIFO read error: %s", strerror(errno));
+			break;
+		}
+		else if (pollret == 0) {
+			if (*fifo_active != 0) {
+				*fifo_active = 0;
+				debug2("Stream inactive, inserting silence");
+			}
+			insert_silence(pos, frames - tframes, pcm->io.format, pcm->io.channels);
+			tframes = frames;
+			break;
+		}
+		else if (pfd.revents & POLLIN) {
+			gettimestamp(&now);
+			if (*fifo_active < 1) {
+				/* If transfers begin too soon the FIFO may be emptied again
+				 * immediately. So we wait until there is a least one full
+				 * period available. */
+				unsigned int nread = 0;
+				ioctl(pcm->ba_pcm_fd, FIONREAD, &nread);
+				if (nread < MIN(pcm->io.period_size * pcm->frame_size, pcm->delay_fifo_size)) {
+					insert_silence(pos, frames, pcm->io.format, pcm->io.channels);
+					tframes = frames;
+					break;
+				}
+				*fifo_active = 1;
+				debug2("Stream active");
+			}
+			ssize_t ret = read(pcm->ba_pcm_fd, pos, len);
+			if (ret == -1) {
+				SNDERR("PCM FIFO read error: %s", strerror(errno));
+				pcm->connected = false;
+				break;
+			}
+			if (ret == 0) {
+				pcm->connected = false;
+				break;
+			}
+			pos += ret;
+			len -= ret;
+			tframes += ret / pcm->frame_size;
+
+			timespecsub(&deadline, &now, &timeout);
+			if (timeout.tv_sec < 0)
+				timeout.tv_sec = 0;
+			if (timeout.tv_nsec < 0)
+				timeout.tv_nsec = 0;
+		}
+		else {
+			/* FIFO closed, flush any remaining frames */
+			if (tframes > 0) {
+				if (tframes < frames) {
+					insert_silence(pos, frames - tframes, pcm->io.format, pcm->io.channels);
+					tframes = frames;
+				}
+			}
+			else {
+				pcm->connected = false;
+				break;
+			}
+		}
+	}
+
+	pthread_sigmask(SIG_SETMASK, &sigset_old, NULL);
+	return pcm->connected && tframes == frames;
+}
+
+/**
+ * Transfer a chunk of audio frames from the ALSA buffer to the FIFO.
+ * The transfer is done atomically - see the explanation for io_thread_read() above.
+ * @return true if transfer completed successfully, false if error occurred. */
+static bool io_thread_write(struct bluealsa_pcm *pcm, char *buffer, snd_pcm_uframes_t frames) {
+	size_t len = frames * pcm->frame_size;
+	ssize_t ret = 0;
+	do {
+		if ((ret = write(pcm->ba_pcm_fd, buffer, len)) == -1) {
+			if (errno == EINTR)
+				continue;
+			if (errno != EPIPE)
+				SNDERR("PCM FIFO write error: %s", strerror(errno));
+			pcm->connected = false;
+			return false;
+		}
+		buffer += ret;
+		len -= ret;
+	} while (len != 0);
+
+	return true;
 }
 
 /**
@@ -218,13 +363,23 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 		goto fail;
 	}
 
-	struct asrsync asrs;
-	asrsync_init(&asrs, io->rate);
+	/* Indicates whether capture stream is delivering samples.
+	 * -1: unknown, 0: inactive, 1: active */
+	int fifo_active = -1;
 
 	/* We update pcm->io_hw_ptr (i.e. the value seen by ioplug) only when
 	 * a period has been completed. We use a temporary copy during the
 	 * transfer procedure. */
 	snd_pcm_sframes_t io_hw_ptr = pcm->io_hw_ptr;
+
+	/* Inform the application thread that the I/O thread is now running */
+	pthread_mutex_lock(&pcm->mutex);
+	pcm->pause_state = BA_PAUSE_STATE_RUNNING;
+	pthread_mutex_unlock(&pcm->mutex);
+	pthread_cond_signal(&pcm->pause_cond);
+
+	struct asrsync asrs;
+	asrsync_init(&asrs, io->rate);
 
 	debug2("Starting IO loop: %d", pcm->ba_pcm_fd);
 	for (;;) {
@@ -263,11 +418,15 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 		 * -1 to indicate we have no work to do. */
 		snd_pcm_uframes_t avail;
 		if ((avail = snd_pcm_ioplug_hw_avail(io, io_hw_ptr, io->appl_ptr)) == 0) {
-			pcm->io_hw_ptr = io_hw_ptr = -1;
-			io_thread_update_delay(pcm, io_hw_ptr);
+			io_hw_ptr = -1;
+			io_thread_update_hw_ptr(pcm, io_hw_ptr);
 			eventfd_write(pcm->event_fd, 1);
 			continue;
 		}
+
+		/* Wake application thread if enough space/frames is available. */
+		if (io->buffer_size - avail >= pcm->io_avail_min)
+			eventfd_write(pcm->event_fd, 1);
 
 		/* current offset of the head pointer in the IO buffer */
 		snd_pcm_uframes_t offset = io_hw_ptr % io->buffer_size;
@@ -286,69 +445,30 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 		if (io->buffer_size - offset < frames)
 			frames = io->buffer_size - offset;
 
-		/* IO operation size in bytes */
-		size_t len = frames * pcm->frame_size;
 		char *head = pcm->io_hw_buffer + offset * pcm->frame_size;
 
-		/* Increment the HW pointer (with boundary wrap). */
+		if (io->stream == SND_PCM_STREAM_CAPTURE) {
+			/* Read the whole period "atomically". This will assure, that frames
+			 * are not fragmented, so the pointer can be correctly updated. */
+			if (!io_thread_read(pcm, head, frames, &asrs, &fifo_active))
+				goto fail;
+		}
+		else {
+			/* Perform atomic write - see the explanation above. */
+			if (!io_thread_write(pcm, head, frames))
+				goto fail;
+		}
+
+		/* synchronize transfer time */
+		asrsync_sync(&asrs, frames);
+
+		/* Advance the HW pointer (with boundary wrap). */
 		io_hw_ptr += frames;
 		if ((snd_pcm_uframes_t)io_hw_ptr >= pcm->io_hw_boundary)
 			io_hw_ptr -= pcm->io_hw_boundary;
 
-		ssize_t ret = 0;
-		if (io->stream == SND_PCM_STREAM_CAPTURE) {
-
-			/* Read the whole period "atomically". This will assure, that frames
-			 * are not fragmented, so the pointer can be correctly updated. */
-			while (len != 0 && (ret = read(pcm->ba_pcm_fd, head, len)) != 0) {
-				if (ret == -1) {
-					if (errno == EINTR)
-						continue;
-					SNDERR("PCM FIFO read error: %s", strerror(errno));
-					pcm->connected = false;
-					goto fail;
-				}
-				head += ret;
-				len -= ret;
-			}
-
-			if (ret == 0) {
-				pcm->connected = false;
-				goto fail;
-			}
-
-			io_thread_update_delay(pcm, io_hw_ptr);
-
-		}
-		else {
-
-			/* Perform atomic write - see the explanation above. */
-			do {
-				if ((ret = write(pcm->ba_pcm_fd, head, len)) == -1) {
-					if (errno == EINTR)
-						continue;
-					if (errno != EPIPE)
-						SNDERR("PCM FIFO write error: %s", strerror(errno));
-					pcm->connected = false;
-					goto fail;
-				}
-				head += ret;
-				len -= ret;
-			} while (len != 0);
-
-			io_thread_update_delay(pcm, io_hw_ptr);
-
-			/* synchronize playback time */
-			asrsync_sync(&asrs, frames);
-
-		}
-
-		/* Make the new HW pointer value visible to the ioplug. */
-		pcm->io_hw_ptr = io_hw_ptr;
-
-		/* Wake application thread if enough space/frames is available. */
-		if (frames + io->buffer_size - avail >= pcm->io_avail_min)
-			eventfd_write(pcm->event_fd, 1);
+		/* Make the the new HW pointer value visible to the ioplug. */
+		io_thread_update_hw_ptr(pcm, io_hw_ptr);
 	}
 
 fail:
@@ -373,17 +493,21 @@ static int bluealsa_start(snd_pcm_ioplug_t *io) {
 	struct bluealsa_pcm *pcm = io->private_data;
 	debug2("Starting");
 
+	/* For capture clear the FIFO to recover from an overrun. */
+	if (io->stream == SND_PCM_STREAM_CAPTURE)
+		splice(pcm->ba_pcm_fd, NULL, pcm->null_fd, NULL, 1024 * 32, SPLICE_F_NONBLOCK);
+
+	if (!bluealsa_dbus_pcm_ctrl_send_resume(pcm->ba_pcm_ctrl_fd, NULL)) {
+		debug2("Couldn't start PCM: %s", strerror(errno));
+		return -errno;
+	}
+
 	/* If the IO thread is already started, skip thread creation. Otherwise,
 	 * we might end up with a bunch of IO threads reading or writing to the
 	 * same FIFO simultaneously. Instead, just send resume signal. */
 	if (pcm->io_started) {
 		pthread_kill(pcm->io_thread, SIGIO);
 		return 0;
-	}
-
-	if (!bluealsa_dbus_pcm_ctrl_send_resume(pcm->ba_pcm_ctrl_fd, NULL)) {
-		debug2("Couldn't start PCM: %s", strerror(errno));
-		return -errno;
 	}
 
 	/* Initialize delay calculation - capture reception begins immediately,
@@ -393,15 +517,24 @@ static int bluealsa_start(snd_pcm_ioplug_t *io) {
 	gettimestamp(&pcm->delay_ts);
 
 	/* start the IO thread */
+	pthread_mutex_lock(&pcm->mutex);
+	pcm->pause_state = BA_PAUSE_STATE_INIT;
 	pcm->io_started = true;
 	if ((errno = pthread_create(&pcm->io_thread, NULL,
 					PTHREAD_FUNC(io_thread), io)) != 0) {
+		pthread_mutex_unlock(&pcm->mutex);
 		debug2("Couldn't create IO thread: %s", strerror(errno));
 		pcm->io_started = false;
 		return -errno;
 	}
 
 	pthread_setname_np(pcm->io_thread, "pcm-io");
+
+	/* Wait for the I/O thread to initialize */
+	while (pcm->pause_state == BA_PAUSE_STATE_INIT)
+		pthread_cond_wait(&pcm->pause_cond, &pcm->mutex);
+	pthread_mutex_unlock(&pcm->mutex);
+
 	return 0;
 }
 
@@ -424,7 +557,17 @@ static int bluealsa_stop(snd_pcm_ioplug_t *io) {
 
 	/* Applications that call poll() after snd_pcm_drain() will be blocked
 	 * forever unless we generate a poll() event here. */
-	eventfd_write(pcm->event_fd, 1);
+	if (io->stream == SND_PCM_STREAM_PLAYBACK)
+		eventfd_write(pcm->event_fd, 1);
+
+	/* For capture, we must ensure that the poll event trigger is not set. */
+	else {
+		eventfd_t event;
+		struct pollfd pfd = { pcm->event_fd, POLLIN, 0 };
+		poll(&pfd, 1, 0);
+		if (pfd.revents & POLLIN)
+			eventfd_read(pcm->event_fd, &event);
+	}
 
 	return 0;
 }
@@ -459,6 +602,9 @@ static int bluealsa_close(snd_pcm_ioplug_t *io) {
 	close(pcm->event_fd);
 	pthread_mutex_destroy(&pcm->mutex);
 	pthread_cond_destroy(&pcm->pause_cond);
+	if (pcm->null_fd != -1)
+		close(pcm->null_fd);
+
 	free(pcm);
 	return 0;
 }
@@ -642,21 +788,44 @@ static int bluealsa_prepare(snd_pcm_ioplug_t *io) {
 		return -ENODEV;
 	}
 
-	/* initialize ring buffer */
-	pcm->io_hw_ptr = 0;
-
 	/* The ioplug allocates and configures its channel area buffer when the
 	 * HW parameters are fixed, but after calling bluealsa_hw_params(). So,
 	 * this is the earliest opportunity for us to safely cache the ring
 	 * buffer start address. */
-	const snd_pcm_channel_area_t *areas = snd_pcm_ioplug_mmap_areas(io);
-	pcm->io_hw_buffer = (char *)areas->addr + areas->first / 8;
+	if (pcm->io_hw_buffer == NULL) {
+		const snd_pcm_channel_area_t *areas = snd_pcm_ioplug_mmap_areas(io);
+		pcm->io_hw_buffer = (char *)areas->addr + areas->first / 8;
+	}
 
-	/* Indicate that our PCM is ready for IO, even though is is not 100%
-	 * true - the IO thread may not be running yet. Applications using
-	 * snd_pcm_sw_params_set_start_threshold() require the PCM to be usable
-	 * as soon as it has been prepared. */
-	eventfd_write(pcm->event_fd, 1);
+	if (io->stream == SND_PCM_STREAM_CAPTURE) {
+		if (pcm->null_fd == -1)
+			pcm->null_fd = open("/dev/null", O_WRONLY | O_NONBLOCK);
+		/* Clear the FIFO to recover from an overrun. */
+		splice(pcm->ba_pcm_fd, NULL, pcm->null_fd, NULL, 1024 * 32, SPLICE_F_NONBLOCK);
+	}
+
+	/* initialize ring buffer */
+	pcm->io_hw_ptr = 0;
+	pcm->delay_hw_ptr = 0;
+	pcm->delay_running = false;
+
+	/* For playback, indicate that our PCM is ready for writing, even though
+	 * this is not 100% true - the IO thread may not be running yet.
+	 * Applications using snd_pcm_sw_params_set_start_threshold() require the
+	 * PCM to be usable as soon as it has been prepared. */
+	if (io->stream == SND_PCM_STREAM_PLAYBACK)
+		eventfd_write(pcm->event_fd, 1);
+
+	/* For capture, we must ensure that the poll event trigger is not set (if we
+	 * are here to recover from an overrun then the event_fd may hold an event
+	 * that has remained unprocessed from before the overrun was detected. */
+	else {
+		eventfd_t event;
+		struct pollfd pfd = { pcm->event_fd, POLLIN, 0 };
+		poll(&pfd, 1, 0);
+		if (pfd.revents & POLLIN)
+			eventfd_read(pcm->event_fd, &event);
+	}
 
 	debug2("Prepared");
 	return 0;
@@ -753,6 +922,7 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 	}
 
 	struct timespec diff;
+	gettimestamp(&now);
 	timespecsub(&now, &pcm->delay_ts, &diff);
 
 	/* the maximum number of frames that can have been
@@ -760,17 +930,17 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 	unsigned int tframes =
 		(diff.tv_sec * 1000 + diff.tv_nsec / 1000000) * io->rate / 1000;
 
-	/* the number of frames that were in the FIFO at pcm->delay_ts */
-	snd_pcm_uframes_t fifo_delay = pcm->delay_pcm_nread / pcm->frame_size;
-
 	if (io->stream == SND_PCM_STREAM_CAPTURE) {
 
-		/* Start with maximum frames available in FIFO since pcm->delay_ts. */
-		delay = fifo_delay + tframes;
+		/* Start with frames added to the FIFO since pcm->delay_ts. */
+		delay = tframes;
 
 		/* Adjust by the change in frames in the buffer. */
 		if (io->state != SND_PCM_STATE_XRUN)
 			delay += io->buffer_size - snd_pcm_ioplug_hw_avail(io, pcm->delay_hw_ptr, io->appl_ptr);
+
+		if (delay < 0)
+			delay = 0;
 
 		/* impose upper limit */
 		snd_pcm_sframes_t limit = pcm->delay_fifo_size + io->buffer_size;
@@ -780,7 +950,8 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 	}
 	else {
 
-		delay = fifo_delay;
+		/* Start with the number of frames that were in the FIFO at pcm->delay_ts */
+		delay = pcm->delay_pcm_nread / pcm->frame_size;
 
 		/* The buffer_delay is the number of frames that were in the buffer at
 		 * pcm->delay_ts, adjusted the number written by the application since
@@ -833,21 +1004,35 @@ static int bluealsa_pause(snd_pcm_ioplug_t *io, int enable) {
 		return -ENODEV;
 	}
 
-	if (!bluealsa_dbus_pcm_ctrl_send(pcm->ba_pcm_ctrl_fd,
-				enable ? "Pause" : "Resume", NULL))
-		return -errno;
+	if (enable == 1) {
+		if (!bluealsa_dbus_pcm_ctrl_send_pause(pcm->ba_pcm_ctrl_fd, NULL))
+			return -errno;
 
-	if (enable == 0)
-		pthread_kill(pcm->io_thread, SIGIO);
-	else
+		if (io->stream == SND_PCM_STREAM_CAPTURE)
+			pcm->delay_running = false;
 		/* store current delay value */
 		pcm->delay_paused = bluealsa_calculate_delay(io);
 
-	/* Even though PCM transport is paused, our IO thread is still running. If
-	 * the implementer relies on the PCM file descriptor readiness, we have to
-	 * bump our internal event trigger. Otherwise, client might stuck forever
-	 * in the poll/select system call. */
-	eventfd_write(pcm->event_fd, 1);
+		/* Our IO thread is now paused, so we must generate a poll() event from
+		 * this thread here. Otherwise the client may be blocked forever in a
+		 * poll/select system call. */
+		eventfd_write(pcm->event_fd, 1);
+	}
+
+	if (enable == 0) {
+		/* for capture only we must clear stale audio frames from the fifo. */
+		if (io->stream == SND_PCM_STREAM_CAPTURE)
+			splice(pcm->ba_pcm_fd, NULL, pcm->null_fd, NULL, 1024 * 32, SPLICE_F_NONBLOCK);
+		if (!bluealsa_dbus_pcm_ctrl_send_resume(pcm->ba_pcm_ctrl_fd, NULL))
+			return -errno;
+
+		/* for capture only we must reset the delay timestamp. */
+		if (io->stream == SND_PCM_STREAM_CAPTURE) {
+			gettimestamp(&pcm->delay_ts);
+			pcm->delay_running = true;
+		}
+		pthread_kill(pcm->io_thread, SIGIO);
+	}
 
 	return 0;
 }
@@ -983,6 +1168,10 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 				}
 				break;
 			case SND_PCM_STATE_XRUN:
+				/* For capture we pause the server until the PCM is restarted. */
+				if (io->stream == SND_PCM_STREAM_CAPTURE)
+					bluealsa_dbus_pcm_ctrl_send_pause(pcm->ba_pcm_ctrl_fd, NULL);
+				/* fallthrough */
 			case SND_PCM_STATE_PAUSED:
 			case SND_PCM_STATE_SUSPENDED:
 				*revents |= POLLERR;
@@ -1363,6 +1552,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 	pcm->event_fd = -1;
 	pcm->ba_pcm_fd = -1;
 	pcm->ba_pcm_ctrl_fd = -1;
+	pcm->null_fd = -1;
 	pcm->delay_ex = delay;
 	pthread_mutex_init(&pcm->mutex, NULL);
 	pthread_cond_init(&pcm->pause_cond, NULL);
