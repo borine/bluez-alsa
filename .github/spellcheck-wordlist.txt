@@ -82,6 +82,7 @@ endian
 endianness
 enum
 init
+isochronous
 middleware
 mutex
 natively
@@ -102,6 +103,7 @@ utils
 
 # Others
 amixer
+bAlternateSetting
 AOT
 aplay
 appl
@@ -167,6 +169,7 @@ hsphs
 hVSB
 ioplug
 IPHONEACCEV
+isoc
 iter
 keyp
 LF
@@ -205,6 +208,8 @@ SNR
 spandsp
 SRA
 sv
+sys
+sysfs
 syslog
 syslogd
 systemd
@@ -216,6 +221,7 @@ uint
 VGM
 VGS
 VTable
+wMaxPacketSize
 writei
 XAPL
 xFFFF

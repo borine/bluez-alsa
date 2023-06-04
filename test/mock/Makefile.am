@@ -24,6 +24,7 @@ bluealsa_mock_SOURCES = \
 	../../src/codec-sbc.c \
 	../../src/dbus.c \
 	../../src/hci.c \
+	../../src/hci-usb.c \
 	../../src/hfp.c \
 	../../src/io.c \
 	../../src/rtp.c \

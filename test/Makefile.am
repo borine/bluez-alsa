@@ -94,6 +94,7 @@ test_ba_SOURCES = \
 	../src/codec-sbc.c \
 	../src/dbus.c \
 	../src/hci.c \
+	../src/hci-usb.c \
 	../src/io.c \
 	../src/sco.c \
 	../src/storage.c \
@@ -113,6 +114,7 @@ test_io_SOURCES = \
 	../src/codec-sbc.c \
 	../src/dbus.c \
 	../src/hci.c \
+	../src/hci-usb.c \
 	../src/hfp.c \
 	../src/io.c \
 	../src/rtp.c \
@@ -140,6 +142,7 @@ test_rfcomm_SOURCES = \
 	../src/bluealsa-config.c \
 	../src/dbus.c \
 	../src/hci.c \
+	../src/hci-usb.c \
 	../src/hfp.c \
 	../src/io.c \
 	../src/utils.c \
@@ -158,6 +161,7 @@ test_utils_SOURCES = \
 	../src/shared/rt.c \
 	../src/bluealsa-config.c \
 	../src/hci.c \
+	../src/hci-usb.c \
 	../src/utils.c \
 	test-utils.c
 

@@ -41,6 +41,7 @@ bluealsa_SOURCES = \
 	codec-sbc.c \
 	dbus.c \
 	hci.c \
+	hci-usb.c \
 	hfp.c \
 	io.c \
 	rtp.c \
