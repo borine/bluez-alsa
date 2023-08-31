@@ -17,7 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-
+#include <sys/types.h>
 #include <check.h>
 #include <glib.h>
 
@@ -51,6 +51,10 @@ int ba_transport_pcm_state_set(struct ba_transport_pcm *pcm,
 enum ba_transport_pcm_signal ba_transport_pcm_signal_recv(struct ba_transport_pcm *pcm) {
 	(void)pcm; return -1; }
 void ba_transport_pcm_thread_cleanup(struct ba_transport_pcm *pcm) { (void)pcm; }
+
+bool bluealsa_pcm_multi_init(struct bluealsa_pcm_multi *multi, size_t transfer_samples) { (void) multi; (void) transfer_samples; return true; }
+ssize_t bluealsa_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t samples) { (void) multi; (void) buffer; (void) samples; return -1; }
+ssize_t bluealsa_pcm_multi_write(struct bluealsa_pcm_multi *multi, const void *buffer, size_t samples) { (void) multi; (void) buffer; (void) samples; return -1; }
 
 CK_START_TEST(test_a2dp_codecs_codec_id_from_string) {
 	ck_assert_uint_eq(a2dp_codecs_codec_id_from_string("SBC"), A2DP_CODEC_SBC);

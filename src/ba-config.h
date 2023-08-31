@@ -75,6 +75,9 @@ struct ba_config {
 	/* disable alt-3 MTU for mSBC with Realtek USB adapters */
 	bool disable_realtek_usb_fix;
 
+	/* Is multi client support enabled? */
+	bool multi_enabled;
+
 	struct {
 
 		/* available HFP codecs */
