@@ -16,6 +16,7 @@
 # include <config.h>
 #endif
 
+#include <stdbool.h>
 #include <sys/types.h>
 
 #include "ba-transport-pcm.h"
@@ -32,6 +33,8 @@ struct io_poll {
 	struct asrsync asrs;
 	/* keep-alive and sync timeout */
 	int timeout;
+	/* true when PCM FIFO is draining */
+	bool drain;
 };
 
 ssize_t io_bt_read(

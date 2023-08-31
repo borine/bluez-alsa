@@ -29,6 +29,7 @@
 #include "ba-transport.h"
 #include "ba-transport-pcm.h"
 #include "ba-config.h"
+#include "bluealsa-pcm-multi.h"
 #include "codec-sbc.h"
 #include "io.h"
 #include "rtp.h"
@@ -189,6 +190,11 @@ void *a2dp_sbc_enc_thread(struct ba_transport_pcm *t_pcm) {
 	/* Get the total delay introduced by the codec. */
 	t_pcm->codec_delay_dms = sbc_delay_frames * 10000 / rate;
 
+	/* start multi client thread if required. */
+	if (t_pcm->multi &&
+			!bluealsa_pcm_multi_init(t_pcm->multi, pcm.nmemb))
+		goto fail_ffb;
+
 	rtp_header_t *rtp_header;
 	rtp_media_header_t *rtp_media_header;
 
@@ -331,6 +337,11 @@ void *a2dp_sbc_dec_thread(struct ba_transport_pcm *t_pcm) {
 		error("Couldn't create data buffers: %s", strerror(errno));
 		goto fail_ffb;
 	}
+
+	/* start multi client thread if required. */
+	if (t_pcm->multi &&
+			!bluealsa_pcm_multi_init(t_pcm->multi, pcm.nmemb))
+		goto fail_ffb;
 
 	struct rtp_state rtp = { .synced = false };
 	/* RTP clock frequency equal to PCM sample rate */

@@ -58,6 +58,12 @@ OPTIONS
     Without this option, **bluealsad** registers itself as an "org.bluealsa"
     D-Bus service.  For more information see the EXAMPLES_ below.
 
+-M, --multi-client
+    Permit multiple clients to connect to the same PCM stream.
+    Without this option, only one client can connect to a PCM.
+    With this option, for playback clients, the streams are mixed together;
+    for capture each client receives a copy of the stream.
+
 -i hciX, --device=hciX
     HCI device to use. Can be specified multiple times to select more than one
     HCI.  Because HCI numbering can change after a system reboot, this option

@@ -22,10 +22,30 @@
 #include <glib.h>
 
 #include "audio.h"
+#include "bluealsa-pcm-multi.h"
 #include "ba-config.h"
 #include "shared/defs.h"
 #include "shared/ffb.h"
 #include "shared/log.h"
+
+/**
+ * Fill a buffer with silence. */
+static void io_pcm_fill_silence(struct ba_transport_pcm *pcm, void *buffer, size_t samples) {
+	g_assert_cmpuint((samples % pcm->channels), ==, 0);
+
+	switch (pcm->format) {
+	case BA_TRANSPORT_PCM_FORMAT_S16_2LE:
+		memset(buffer, 0, samples * 2);
+		break;
+	case BA_TRANSPORT_PCM_FORMAT_S24_4LE:
+	case BA_TRANSPORT_PCM_FORMAT_S32_4LE:
+		memset(buffer, 0, samples * 4);
+		break;
+	default:
+		g_assert_not_reached();
+	}
+
+}
 
 /**
  * Read data from the BT transport (SCO or SEQPACKET) socket. */
@@ -181,7 +201,7 @@ ssize_t io_pcm_flush(struct ba_transport_pcm *pcm) {
 
 /**
  * Read PCM signal from the transport PCM FIFO. */
-ssize_t io_pcm_read(
+ssize_t io_pcm_single_read(
 		struct ba_transport_pcm *pcm,
 		void *buffer,
 		size_t samples) {
@@ -212,8 +232,23 @@ ssize_t io_pcm_read(
 }
 
 /**
- * Write PCM signal to the transport PCM FIFO. */
-ssize_t io_pcm_write(
+ * Read PCM signal from the transport PCM FIFO or mix as appropriate. */
+ssize_t io_pcm_read(
+		struct ba_transport_pcm *pcm,
+		void *buffer,
+		size_t samples) {
+	if (pcm->multi)
+		return bluealsa_pcm_multi_read(pcm->multi, buffer, samples);
+	else
+		return io_pcm_single_read(pcm, buffer, samples);
+}
+
+/**
+ * Write PCM signal to the transport PCM FIFO.
+ *
+ * Note:
+ * This function may temporally re-enable thread cancellation! */
+ssize_t io_pcm_single_write(
 		struct ba_transport_pcm *pcm,
 		const void *buffer,
 		size_t samples) {
@@ -265,6 +300,21 @@ final:
 }
 
 /**
+ * Write samples to PCM.
+ *
+ * Selects either multi or direct client FIFO depending on whether
+ * multi client support is enabled. */
+ssize_t io_pcm_write(
+		struct ba_transport_pcm *pcm,
+		const void *buffer,
+		size_t samples) {
+	if (pcm->multi == NULL)
+		return io_pcm_single_write(pcm, buffer, samples);
+	else
+		return bluealsa_pcm_multi_write(pcm->multi, buffer, samples);
+}
+
+/**
  * Poll and read data from the BT transport socket.
  *
  * Note:
@@ -302,6 +352,15 @@ repoll:
 	return len;
 }
 
+static void drain_complete(struct io_poll *io, struct ba_transport_pcm *pcm) {
+	io->drain = false;
+	io->timeout = -1;
+	pthread_mutex_lock(&pcm->mutex);
+	pcm->synced = true;
+	pthread_mutex_unlock(&pcm->mutex);
+	pthread_cond_signal(&pcm->cond);
+}
+
 /**
  * Poll and read data from the PCM FIFO.
  *
@@ -330,15 +389,15 @@ repoll:
 	/* Poll for reading with optional sync timeout. */
 	switch (poll_rv) {
 	case 0:
-		pthread_mutex_lock(&pcm->mutex);
-		pcm->synced = true;
-		pthread_mutex_unlock(&pcm->mutex);
-		pthread_cond_signal(&pcm->cond);
-		io->timeout = -1;
+		if (io->drain)
+			break;
+		drain_complete(io, pcm);
 		return 0;
 	case -1:
 		if (errno == EINTR)
 			goto repoll;
+		if (io->drain)
+			drain_complete(io, pcm);
 		return -1;
 	}
 
@@ -348,14 +407,18 @@ repoll:
 		case BA_TRANSPORT_PCM_SIGNAL_RESUME:
 			io->asrs.frames = 0;
 			io->timeout = -1;
+			io->drain = false;
 			goto repoll;
 		case BA_TRANSPORT_PCM_SIGNAL_CLOSE:
 			/* reuse PCM read disconnection logic */
 			break;
 		case BA_TRANSPORT_PCM_SIGNAL_SYNC:
+			io->drain = true;
 			io->timeout = 100;
 			goto repoll;
 		case BA_TRANSPORT_PCM_SIGNAL_DROP:
+			if (io->drain)
+				drain_complete(io, pcm);
 			/* Notify caller that the PCM FIFO has been dropped. This will give
 			 * the caller a chance to reinitialize its internal state. */
 			errno = ESTALE;
@@ -364,20 +427,38 @@ repoll:
 			goto repoll;
 		}
 
-	if (fds[1].revents == 0)
-		return 0;
-
 	ssize_t samples;
 	if ((samples = io_pcm_read(pcm, buffer->tail, ffb_len_in(buffer))) == -1) {
-		if (errno == EAGAIN)
-			goto repoll;
-		if (errno != EBADF)
-			return -1;
-		samples = 0;
+		switch (errno) {
+		case EAGAIN:
+			if (io->drain) {
+				/* The FIFO is now empty, but must still ensure that any
+				 * remaining frames in the encoder buffer are flushed
+				 * to bt; so we pad the buffer with silence to ensure the
+				 * encoder codesize minimum is available. */
+				samples = ffb_len_in(buffer);
+				io_pcm_fill_silence(pcm, buffer->tail, samples);
+				/* Make sure that the next time this function is called we
+				 * signal that the drain is complete */
+				io->drain = false;
+				io->timeout = 0;
+				break;
+			}
+			else
+				goto repoll;
+		case EBADF:
+			samples = 0;
+			break;
+		default:
+			break;
+		}
 	}
 
-	if (samples == 0)
-		return 0;
+	if (samples <= 0) {
+		if (io->drain)
+			drain_complete(io, pcm);
+		return samples;
+	}
 
 	/* When the thread is created, there might be no data in the FIFO. In fact
 	 * there might be no data for a long time - until client starts playback.

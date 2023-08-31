@@ -22,6 +22,7 @@
 
 #include "ba-transport.h"
 #include "ba-transport-pcm.h"
+#include "bluealsa-pcm-multi.h"
 #include "codec-lc3-swb.h"
 #include "io.h"
 #include "shared/defs.h"
@@ -44,6 +45,10 @@ void *sco_lc3_swb_enc_thread(struct ba_transport_pcm *t_pcm) {
 	/* Get the total delay introduced by the codec. */
 	const ssize_t lc3_swb_delay_frames = lc3_swb_get_delay(&codec);
 	t_pcm->codec_delay_dms = lc3_swb_delay_frames * 10000 / t_pcm->rate;
+
+	/* start multi client thread if required. */
+	if (t_pcm->multi && !bluealsa_pcm_multi_init(t_pcm->multi, codec.pcm.nmemb))
+		goto exit;
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
 	for (ba_transport_pcm_state_set_running(t_pcm);;) {
@@ -112,6 +117,10 @@ void *sco_lc3_swb_dec_thread(struct ba_transport_pcm *t_pcm) {
 
 	struct esco_lc3_swb codec;
 	lc3_swb_init(&codec);
+
+	/* start multi client thread if required. */
+	if (t_pcm->multi && !bluealsa_pcm_multi_init(t_pcm->multi, codec.pcm.nmemb))
+		goto exit;
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
 	for (ba_transport_pcm_state_set_running(t_pcm);;) {

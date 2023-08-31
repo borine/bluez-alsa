@@ -19,6 +19,7 @@
 
 #include "ba-transport.h"
 #include "ba-transport-pcm.h"
+#include "bluealsa-pcm-multi.h"
 #include "codec-msbc.h"
 #include "io.h"
 #include "shared/defs.h"
@@ -46,6 +47,10 @@ void *sco_msbc_enc_thread(struct ba_transport_pcm *t_pcm) {
 	const unsigned int sbc_delay_frames = 73;
 	/* Get the total delay introduced by the codec. */
 	t_pcm->codec_delay_dms = sbc_delay_frames * 10000 / t_pcm->rate;
+
+	/* start multi client thread if required. */
+	if (t_pcm->multi && !bluealsa_pcm_multi_init(t_pcm->multi, msbc.pcm.nmemb))
+		goto fail_msbc;
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
 	for (ba_transport_pcm_state_set_running(t_pcm);;) {
@@ -126,6 +131,10 @@ void *sco_msbc_dec_thread(struct ba_transport_pcm *t_pcm) {
 		error("Couldn't initialize mSBC codec: %s", strerror(errno));
 		goto fail_msbc;
 	}
+
+	/* start multi client thread if required. */
+	if (t_pcm->multi && !bluealsa_pcm_multi_init(t_pcm->multi, msbc.pcm.nmemb))
+		goto fail_msbc;
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
 	for (ba_transport_pcm_state_set_running(t_pcm);;) {
