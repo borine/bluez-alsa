@@ -6,7 +6,7 @@ bluealsad
 Bluetooth Audio ALSA Backend
 ----------------------------
 
-:Date: December 2024
+:Date: January 2025
 :Manual section: 8
 :Manual group: System Manager's Manual
 :Version: $VERSION$
@@ -57,6 +57,12 @@ OPTIONS
     BlueALSA D-Bus service name suffix.
     Without this option, **bluealsad** registers itself as an "org.bluealsa"
     D-Bus service.  For more information see the EXAMPLES_ below.
+
+-M, --multi-client
+    Permit multiple clients to connect to the same PCM stream.
+    Without this option, only one client can connect to a PCM.
+    With this option, for playback clients, the streams are mixed together;
+    for capture each client receives a copy of the stream.
 
 -i hciX, --device=hciX
     HCI device to use. Can be specified multiple times to select more than one
@@ -477,7 +483,7 @@ Please add following lines to the BlueALSA D-Bus policy:
 COPYRIGHT
 =========
 
-Copyright (c) 2016-2024 Arkadiusz Bokowy.
+Copyright (c) 2016-2025 Arkadiusz Bokowy.
 
 The bluez-alsa project is licensed under the terms of the MIT license.
 

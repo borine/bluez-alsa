@@ -35,6 +35,9 @@ bluealsad_SOURCES = \
 	ba-transport-pcm.c \
 	bluealsa-dbus.c \
 	bluealsa-iface.xml \
+	bluealsa-mix-buffer.c \
+	bluealsa-pcm-client.c \
+	bluealsa-pcm-multi.c \
 	bluez.c \
 	bluez-iface.xml \
 	codec-sbc.c \
