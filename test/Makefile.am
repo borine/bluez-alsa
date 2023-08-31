@@ -115,6 +115,9 @@ test_ba_SOURCES = \
 	../src/ba-transport.c \
 	../src/ba-transport-pcm.c \
 	../src/codec-sbc.c \
+	../src/bluealsa-mix-buffer.c \
+	../src/bluealsa-pcm-client.c \
+	../src/bluealsa-pcm-multi.c \
 	../src/dbus.c \
 	../src/h2.c \
 	../src/hci.c \
@@ -147,6 +150,9 @@ test_io_SOURCES = \
 	../src/ba-config.c \
 	../src/ba-device.c \
 	../src/ba-transport-pcm.c \
+	../src/bluealsa-mix-buffer.c \
+	../src/bluealsa-pcm-client.c \
+	../src/bluealsa-pcm-multi.c \
 	../src/codec-sbc.c \
 	../src/dbus.c \
 	../src/h2.c \
@@ -199,6 +205,9 @@ test_rfcomm_SOURCES = \
 	../src/ba-rfcomm.c \
 	../src/ba-transport.c \
 	../src/ba-transport-pcm.c \
+	../src/bluealsa-mix-buffer.c \
+	../src/bluealsa-pcm-client.c \
+	../src/bluealsa-pcm-multi.c \
 	../src/dbus.c \
 	../src/h2.c \
 	../src/hci.c \

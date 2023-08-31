@@ -21,6 +21,9 @@ bluealsa_mock_SOURCES = \
 	../../src/ba-transport-pcm.c \
 	../../src/bluealsa-dbus.c \
 	../../src/bluealsa-iface.c \
+	../../src/bluealsa-mix-buffer.c \
+	../../src/bluealsa-pcm-client.c \
+	../../src/bluealsa-pcm-multi.c \
 	../../src/bluez.c \
 	../../src/bluez-iface.c \
 	../../src/codec-sbc.c \

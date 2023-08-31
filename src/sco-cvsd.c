@@ -18,6 +18,7 @@
 
 #include "ba-transport.h"
 #include "ba-transport-pcm.h"
+#include "bluealsa-pcm-multi.h"
 #include "io.h"
 #include "shared/defs.h"
 #include "shared/ffb.h"
@@ -43,6 +44,10 @@ void *sco_cvsd_enc_thread(struct ba_transport_pcm *t_pcm) {
 		error("Couldn't create data buffer: %s", strerror(errno));
 		goto fail_init;
 	}
+
+	/* start multi client thread if required. */
+	if (t_pcm->multi && !bluealsa_pcm_multi_init(t_pcm->multi, buffer.nmemb))
+		goto fail_init;
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
 	for (ba_transport_pcm_state_set_running(t_pcm);;) {
@@ -111,6 +116,10 @@ void *sco_cvsd_dec_thread(struct ba_transport_pcm *t_pcm) {
 		error("Couldn't create data buffers: %s", strerror(errno));
 		goto fail_ffb;
 	}
+
+	/* start multi client thread if required. */
+	if (t_pcm->multi && !bluealsa_pcm_multi_init(t_pcm->multi, buffer.nmemb))
+		goto fail_ffb;
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
 	for (ba_transport_pcm_state_set_running(t_pcm);;) {

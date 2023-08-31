@@ -28,6 +28,7 @@
 #include "ba-config.h"
 #include "ba-transport.h"
 #include "ba-transport-pcm.h"
+#include "bluealsa-pcm-multi.h"
 #include "io.h"
 #include "rtp.h"
 #include "shared/a2dp-codecs.h"
@@ -166,6 +167,11 @@ void *a2dp_opus_enc_thread(struct ba_transport_pcm *t_pcm) {
 		goto fail_ffb;
 	}
 
+	/* start multi client thread if required. */
+	if (t_pcm->multi &&
+			!bluealsa_pcm_multi_init(t_pcm->multi, pcm.nmemb))
+		goto fail_ffb;
+
 	rtp_header_t *rtp_header;
 	rtp_media_header_t *rtp_media_header;
 	/* initialize RTP headers and get anchor for payload */
@@ -291,6 +297,11 @@ void *a2dp_opus_dec_thread(struct ba_transport_pcm *t_pcm) {
 		error("Couldn't create data buffers: %s", strerror(errno));
 		goto fail_ffb;
 	}
+
+	/* start multi client thread if required. */
+	if (t_pcm->multi &&
+			!bluealsa_pcm_multi_init(t_pcm->multi, pcm.nmemb))
+		goto fail_ffb;
 
 	struct rtp_state rtp = { .synced = false };
 	/* RTP clock frequency equal to audio sampling rate */

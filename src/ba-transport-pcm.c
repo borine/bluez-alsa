@@ -32,6 +32,7 @@
 #include "ba-rfcomm.h"
 #include "ba-transport.h"
 #include "bluealsa-dbus.h"
+#include "bluealsa-pcm-multi.h"
 #include "bluez-iface.h"
 #include "bluez.h"
 #include "dbus.h"
@@ -77,6 +78,9 @@ int transport_pcm_init(
 	pcm->pipe[0] = -1;
 	pcm->pipe[1] = -1;
 
+	pcm->multi = NULL;
+	pcm->paused = false;
+
 	pcm->volume[0].level = config.volume_init_level;
 	pcm->volume[1].level = config.volume_init_level;
 	ba_transport_pcm_volume_set(&pcm->volume[0], NULL, NULL, NULL);
@@ -96,6 +100,9 @@ int transport_pcm_init(
 	pcm->ba_dbus_path = g_strdup_printf("%s/%s/%s",
 			t->d->ba_dbus_path, transport_get_dbus_path_type(t->profile),
 			mode == BA_TRANSPORT_PCM_MODE_SOURCE ? "source" : "sink");
+
+	if (bluealsa_pcm_multi_enabled(t))
+		pcm->multi = bluealsa_pcm_multi_create(pcm);
 
 	return 0;
 }
@@ -120,6 +127,11 @@ void transport_pcm_free(
 
 	g_hash_table_unref(pcm->delay_adjustments);
 	g_free(pcm->ba_dbus_path);
+
+	if (pcm->multi != NULL) {
+		bluealsa_pcm_multi_free(pcm->multi);
+		pcm->multi = NULL;
+	}
 
 }
 
@@ -240,6 +252,10 @@ void ba_transport_pcm_thread_cleanup(struct ba_transport_pcm *pcm) {
 	pthread_mutex_lock(&t->bt_fd_mtx);
 	ba_transport_stop_async(t);
 	pthread_mutex_unlock(&t->bt_fd_mtx);
+
+	/* Stop multi client thread if required. */
+	if (pcm->multi)
+		bluealsa_pcm_multi_reset(pcm->multi);
 
 	/* Release BT socket file descriptor duplicate created either in the
 	 * ba_transport_pcm_start() function or in the IO thread itself. */
@@ -525,7 +541,7 @@ int ba_transport_pcm_drop(struct ba_transport_pcm *pcm) {
 	pthread_mutex_unlock(&pcm->mutex);
 #endif
 
-	if (io_pcm_flush(pcm) == -1)
+	if (!pcm->multi && io_pcm_flush(pcm) == -1)
 		return -1;
 
 	int rv = ba_transport_pcm_signal_send(pcm, BA_TRANSPORT_PCM_SIGNAL_DROP);
@@ -711,7 +727,10 @@ int ba_transport_pcm_get_delay(const struct ba_transport_pcm *pcm) {
 	if (t->profile & BA_TRANSPORT_PROFILE_MASK_SCO)
 		delay += 10;
 
-	return delay;
+	if (pcm->multi)
+		return delay + pcm->multi->delay;
+	else
+		return delay;
 }
 
 int16_t ba_transport_pcm_delay_adjustment_get(
