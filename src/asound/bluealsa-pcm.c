@@ -12,7 +12,6 @@
 # include <config.h>
 #endif
 
-#include <alloca.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -47,11 +46,12 @@
 #define BA_PAUSE_STATE_PAUSED  (1 << 1)
 #define BA_PAUSE_STATE_PENDING (1 << 2)
 
-#if SND_LIB_VERSION >= 0x010104
+#if SND_LIB_VERSION >= 0x010104 && SND_LIB_VERSION < 0x010206
+#include <alloca.h>
 /**
- * alsa-lib releases from 1.1.4 have a bug in the rate plugin
- * which, when combined with the hw params refinement algorithm used by the
- * ioplug, can cause snd_pcm_avail() to return bogus values. This, in turn,
+ * alsa-lib releases from 1.1.4 to 1.2.5.1 inclusive have a bug in the rate
+ * plugin which, when combined with the hw params refinement algorithm used by
+ * the ioplug, can cause snd_pcm_avail() to return bogus values. This, in turn,
  * can trigger deadlock in applications built on the portaudio library
  * (e.g. audacity) and possibly cause faults in other applications too.
  *
@@ -211,8 +211,20 @@ static void frames_to_timespec(struct timespec *ts, snd_pcm_uframes_t frames, un
 	ts->tv_nsec = 1000000000L / rate * (frames % rate);
 }
 
-static void insert_silence(char *buf, snd_pcm_uframes_t frames, int format, int channels) {
-	snd_pcm_format_set_silence(format, buf, frames * channels);
+static void insert_silence(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, snd_pcm_uframes_t frames, int format, int channels) {
+
+	char *buf = pcm->io_hw_buffer + offset * pcm->frame_size;
+
+	/* Allow for fragmented period at end of buffer */
+	const snd_pcm_uframes_t avail = pcm->io.buffer_size - offset;
+	snd_pcm_uframes_t chunk = avail < frames ? avail : frames;
+
+	snd_pcm_format_set_silence(format, buf, chunk * channels);
+	if (chunk < frames) {
+		buf = pcm->io_hw_buffer;
+		chunk = frames - chunk;
+		snd_pcm_format_set_silence(format, buf, chunk * channels);
+	}
 }
 
 /**
@@ -222,18 +234,17 @@ static void insert_silence(char *buf, snd_pcm_uframes_t frames, int format, int 
  * Regulates the average rate at which frames are transferred, and inserts
  * intervals of silence into the stream if necessary to maintain the rate.
  * @return true if transfer completed successfully, false if error occurred. */
-static bool io_thread_read(struct bluealsa_pcm *pcm, char *buffer, snd_pcm_uframes_t frames, struct asrsync *asrs, int *fifo_active) {
+static bool io_thread_read(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, snd_pcm_uframes_t frames, struct asrsync *asrs, int *fifo_active) {
 	/* count of frames added to buffer in this call */
 	snd_pcm_uframes_t tframes = 0;
-	char *pos = buffer;
-	size_t len = frames * pcm->frame_size;
 	struct timespec deadline, now, temp, timeout;
 	int pollret;
 
 	/* Set a deadline for this transfer to complete. */
 	frames_to_timespec(&temp, frames + asrs->frames, pcm->io.rate);
 	timespecadd(&temp, &asrs->ts0, &deadline);
-	if (difftimespec(&deadline, &asrs->ts, &timeout) > 0) {
+	if (difftimespec(&deadline, &asrs->ts, &timeout) > 0 &&
+			(timeout.tv_nsec > 50000 || timeout.tv_sec > 0)) {
 		/* we have already exceeded the time allowance for this read */
 		debug2("I/O thread too slow to maintain rate, lost sync");
 		return false;
@@ -260,7 +271,7 @@ static bool io_thread_read(struct bluealsa_pcm *pcm, char *buffer, snd_pcm_ufram
 				*fifo_active = 0;
 				debug2("Stream inactive, inserting silence");
 			}
-			insert_silence(pos, frames - tframes, pcm->io.format, pcm->io.channels);
+			insert_silence(pcm, offset, frames - tframes, pcm->io.format, pcm->io.channels);
 			tframes = frames;
 			break;
 		}
@@ -273,13 +284,21 @@ static bool io_thread_read(struct bluealsa_pcm *pcm, char *buffer, snd_pcm_ufram
 				unsigned int nread = 0;
 				ioctl(pcm->ba_pcm_fd, FIONREAD, &nread);
 				if (nread < MIN(pcm->io.period_size * pcm->frame_size, pcm->delay_fifo_size)) {
-					insert_silence(pos, frames, pcm->io.format, pcm->io.channels);
+					insert_silence(pcm, offset, frames - tframes, pcm->io.format, pcm->io.channels);
 					tframes = frames;
 					break;
 				}
 				*fifo_active = 1;
 				debug2("Stream active");
 			}
+			/* Allow for fragmented period at end of buffer */
+			snd_pcm_uframes_t chunk = frames - tframes;
+			const snd_pcm_uframes_t avail = pcm->io.buffer_size - offset;
+			if (avail < chunk)
+				chunk = avail;
+			char *pos = pcm->io_hw_buffer + offset * pcm->frame_size;
+
+			size_t len = chunk * pcm->frame_size;
 			ssize_t ret = read(pcm->ba_pcm_fd, pos, len);
 			if (ret == -1) {
 				SNDERR("PCM FIFO read error: %s", strerror(errno));
@@ -290,21 +309,23 @@ static bool io_thread_read(struct bluealsa_pcm *pcm, char *buffer, snd_pcm_ufram
 				pcm->connected = false;
 				break;
 			}
-			pos += ret;
-			len -= ret;
 			tframes += ret / pcm->frame_size;
+			offset += ret / pcm->frame_size;
+			if (offset >= pcm->io.buffer_size)
+				offset = 0;
 
 			timespecsub(&deadline, &now, &timeout);
 			if (timeout.tv_sec < 0)
 				timeout.tv_sec = 0;
 			if (timeout.tv_nsec < 0)
 				timeout.tv_nsec = 0;
+
 		}
 		else {
 			/* FIFO closed, flush any remaining frames */
 			if (tframes > 0) {
 				if (tframes < frames) {
-					insert_silence(pos, frames - tframes, pcm->io.format, pcm->io.channels);
+					insert_silence(pcm, offset, frames - tframes, pcm->io.format, pcm->io.channels);
 					tframes = frames;
 				}
 			}
@@ -323,21 +344,39 @@ static bool io_thread_read(struct bluealsa_pcm *pcm, char *buffer, snd_pcm_ufram
  * Transfer a chunk of audio frames from the ALSA buffer to the FIFO.
  * The transfer is done atomically - see the explanation for io_thread_read() above.
  * @return true if transfer completed successfully, false if error occurred. */
-static bool io_thread_write(struct bluealsa_pcm *pcm, char *buffer, snd_pcm_uframes_t frames) {
-	size_t len = frames * pcm->frame_size;
+static bool io_thread_write(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, snd_pcm_uframes_t frames) {
 	ssize_t ret = 0;
-	do {
-		if ((ret = write(pcm->ba_pcm_fd, buffer, len)) == -1) {
-			if (errno == EINTR)
-				continue;
-			if (errno != EPIPE)
-				SNDERR("PCM FIFO write error: %s", strerror(errno));
-			pcm->connected = false;
-			return false;
-		}
-		buffer += ret;
-		len -= ret;
-	} while (len != 0);
+
+	/* When used with the rate plugin the buffer size may not be an
+	 * integer multiple of the period size. If so, the current period may
+	 * be split, part at the end of the buffer and the remainder at the
+	 * start. In this case we must perform the transfer in two chunks to
+	 * make up a full period.  */
+	snd_pcm_uframes_t chunk = frames;
+	if (pcm->io.buffer_size - offset < frames)
+		chunk = pcm->io.buffer_size - offset;
+
+	snd_pcm_uframes_t frames_transfered = 0;
+	while (frames_transfered < frames) {
+		char *pos = pcm->io_hw_buffer + offset * pcm->frame_size;
+		size_t len = chunk * pcm->frame_size;
+		do {
+			if ((ret = write(pcm->ba_pcm_fd, pos, len)) == -1) {
+				if (errno == EINTR)
+					continue;
+				if (errno != EPIPE)
+					SNDERR("PCM FIFO write error: %s", strerror(errno));
+				pcm->connected = false;
+				return false;
+			}
+			pos += ret;
+			len -= ret;
+		} while (len != 0);
+
+		frames_transfered += chunk;
+		offset = 0;
+		chunk = frames - chunk;
+	}
 
 	return true;
 }
@@ -438,24 +477,15 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 		if (frames > avail)
 			frames = avail;
 
-		/* When used with the rate plugin the buffer might contain a fractional
-		 * number of periods. So if the leftover in the buffer is less than a
-		 * whole period size, adjust the number of frames which should be
-		 * transferred.  */
-		if (io->buffer_size - offset < frames)
-			frames = io->buffer_size - offset;
-
-		char *head = pcm->io_hw_buffer + offset * pcm->frame_size;
-
 		if (io->stream == SND_PCM_STREAM_CAPTURE) {
 			/* Read the whole period "atomically". This will assure, that frames
 			 * are not fragmented, so the pointer can be correctly updated. */
-			if (!io_thread_read(pcm, head, frames, &asrs, &fifo_active))
+			if (!io_thread_read(pcm, offset, frames, &asrs, &fifo_active))
 				goto fail;
 		}
 		else {
 			/* Perform atomic write - see the explanation above. */
-			if (!io_thread_write(pcm, head, frames))
+			if (!io_thread_write(pcm, offset, frames))
 				goto fail;
 		}
 
@@ -469,6 +499,7 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 
 		/* Make the the new HW pointer value visible to the ioplug. */
 		io_thread_update_hw_ptr(pcm, io_hw_ptr);
+
 	}
 
 fail:
@@ -844,42 +875,94 @@ static int bluealsa_drain(snd_pcm_ioplug_t *io) {
 	 * always either finishes in state SND_PCM_STATE_SETUP or returns an error.
 	 * It is not possible to finish in state SND_PCM_STATE_DRAINING and return
 	 * success; therefore is is impossible to correctly implement capture
-	 * drain logic. So for capture PCMs we do nothing and return success. */
+	 * drain logic. So for capture PCMs we do nothing and return success;
+	 * ioplug will stop the PCM. */
+	if (io->stream == SND_PCM_STREAM_CAPTURE)
+		return 0;
 
-	if (io->stream == SND_PCM_STREAM_PLAYBACK) {
+	/* We must ensure that all remaining frames in the ring buffer are flushed
+	 * to the FIFO by the I/O thread. It is possible that the client has called
+	 * snd_pcm_drain() without the start_threshold having been reached, or
+	 * while paused, so we must first ensure that the IO thread is running. */
+	if (bluealsa_start(io) < 0) {
+		/* Insufficient resources to start a new thread - so we have no choice
+		 * but to drop this stream. */
+		bluealsa_stop(io);
+		snd_pcm_ioplug_set_state(io, SND_PCM_STATE_SETUP);
+		return -EIO;
+	}
 
-		/* We must ensure that all remaining frames in the ring buffer are
-		 * flushed to the FIFO by the I/O thread. It is possible that the
-		 * client has called snd_pcm_drain() without the start_threshold
-		 * having been reached, or while paused, so we must first ensure that
-		 * the IO thread is running. */
-		if (bluealsa_start(io) < 0)
-			return 0;
+	/* For a non-blocking drain, we do not wait for the drain to complete. */
+	if (io->nonblock == 1)
+		return -EAGAIN;
 
-		/* Block until the drain is complete. */
-		struct pollfd pfd = { pcm->event_fd, POLLIN, 0 };
-		while (bluealsa_pointer(io) >= 0 && io->state == SND_PCM_STATE_DRAINING) {
-			if (poll(&pfd, 1, -1) == -1) {
-				if (errno == EINTR)
+	struct pollfd pfd = { pcm->event_fd, POLLIN, 0 };
+	bool aborted = false;
+	int ret = 0;
+
+	snd_pcm_sframes_t hw_ptr;
+	while ((hw_ptr = bluealsa_pointer(io)) >= 0 && io->state == SND_PCM_STATE_DRAINING) {
+
+		snd_pcm_uframes_t avail = snd_pcm_ioplug_hw_avail(io, hw_ptr, io->appl_ptr);
+
+		/* If the buffer is empty then the local drain is complete. */
+		if (avail == 0)
+			break;
+
+		/* We set a timeout to ensure that the plugin cannot block forever in
+		 * case the server has stopped reading from the FIFO. Allow enough time
+		 * to drain the available frames as full periods, plus 100 ms:
+		 * e.g. one or less periods in buffer, allow 100ms + one period, more
+		 *      than one but not more than two, allow 100ms + two periods, etc.
+		 * If the wait is re-started after being interrupted by a signal then
+		 * we must re-calculate the maximum waiting time that remains. */
+		int timeout = 100 + (((avail - 1) / io->period_size) + 1) * io->period_size * 1000 / io->rate;
+
+		int nready = poll(&pfd, 1, timeout);
+		if (nready == -1) {
+			if (errno == EINTR) {
+				/* It is not well documented by ALSA, but if the application has
+				 * requested that the PCM should be aborted by a signal then the
+				 * ioplug nonblock flag is set to the special value 2. */
+				if (io->nonblock != 2)
 					continue;
-				break;
+				/* Application has aborted the drain. */
+				debug2("Drain aborted by signal");
+				aborted = true;
 			}
-			if (pfd.revents & POLLIN) {
-				eventfd_t event;
-				eventfd_read(pcm->event_fd, &event);
-				if (event & 0xDEAD0000)
-					break;
+			else {
+				debug2("Drain poll error: %s", strerror(errno));
+				bluealsa_stop(io);
+				snd_pcm_ioplug_set_state(io, SND_PCM_STATE_SETUP);
+				ret = -EIO;
 			}
+
+			break;
+		}
+		if (nready == 0) {
+			/* Timeout - do not wait any longer. */
+			SNDERR("Drain timed out: Possible Bluetooth transport failure");
+			bluealsa_stop(io);
+			io->state = SND_PCM_STATE_SETUP;
+			ret = -EIO;
+			break;
 		}
 
-		bluealsa_dbus_pcm_ctrl_send_drain(pcm->ba_pcm_ctrl_fd, NULL);
+		if (pfd.revents & POLLIN) {
+			eventfd_t event;
+			eventfd_read(pcm->event_fd, &event);
+		}
 
 	}
 
-	/* We cannot recover from an error here. By returning zero we ensure that
-	 * ioplug stops the pcm. Returning an error code would be interpreted by
-	 * ioplug as an incomplete drain and would it leave the pcm running. */
-	return 0;
+	if (io->state == SND_PCM_STATE_DRAINING && !aborted)
+		if (!bluealsa_dbus_pcm_ctrl_send_drain(pcm->ba_pcm_ctrl_fd, NULL)) {
+			bluealsa_stop(io);
+			io->state = SND_PCM_STATE_SETUP;
+			ret = -EIO;
+		}
+
+	return ret;
 }
 
 /**
@@ -1138,7 +1221,8 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 			goto fail;
 
 		/* This call synchronizes the ring buffer pointers and updates the
-		 * ioplug state. */
+		 * ioplug state. For non-blocking drains it also causes ioplug to drop
+		 * the stream when the buffer is empty. */
 		snd_pcm_sframes_t avail = snd_pcm_avail(io->pcm);
 
 		/* ALSA expects that the event will match stream direction, e.g.
@@ -1151,8 +1235,13 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 
 		switch (io->state) {
 			case SND_PCM_STATE_SETUP:
+				/* To support non-blocking drain we must report a POLLOUT event
+				 * for playback PCMs here, because the above call to
+				 * snd_pcm_avail() may have changed the state to
+				 * SND_PCM_STATE_SETUP. */
+				if (io->stream == SND_PCM_STREAM_CAPTURE)
+					*revents = 0;
 				ready = false;
-				*revents = 0;
 				break;
 			case SND_PCM_STATE_PREPARED:
 				/* capture poll should block forever */
@@ -1163,6 +1252,15 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 				break;
 			case SND_PCM_STATE_RUNNING:
 				if ((snd_pcm_uframes_t)avail < pcm->io_avail_min) {
+					ready = false;
+					*revents = 0;
+				}
+				break;
+			case SND_PCM_STATE_DRAINING:
+				/* BlueALSA does not drain capture PCMs. So this state only
+				 * occurs with playback PCMs. Do not wake the application until
+				 * the buffer is empty. */
+				if ((snd_pcm_uframes_t)avail < io->buffer_size) {
 					ready = false;
 					*revents = 0;
 				}
