@@ -111,6 +111,8 @@ struct bluealsa_pcm {
 	_Atomic snd_pcm_uframes_t io_avail_min;
 	/* Raise poll event at every period end */
 	atomic_int io_period_event;
+	/* Permit the application to modify XRUN behavior. */
+	_Atomic snd_pcm_uframes_t io_stop_threshold;
 	pthread_t io_thread;
 	bool io_started;
 
@@ -153,20 +155,45 @@ struct bluealsa_pcm {
 /**
  * Get the available frames.
  *
- * This function is available in alsa-lib since version 1.1.6. For older
+ * These functions are available in alsa-lib since version 1.1.6. For older
  * alsa-lib versions we need to provide our own implementation. */
+
+/* The number of frames available to the application. May be larger than the
+ * buffer size if stop_threshold > buffer_size. */
+static snd_pcm_uframes_t snd_pcm_ioplug_avail(const snd_pcm_ioplug_t * const io,
+		const snd_pcm_uframes_t hw_ptr, const snd_pcm_uframes_t appl_ptr) {
+	struct bluealsa_pcm *pcm = io->private_data;
+	snd_pcm_sframes_t avail;
+
+	if (io->stream == SND_PCM_STREAM_PLAYBACK) {
+		avail = hw_ptr + io->buffer_size - appl_ptr;
+		if (avail < 0)
+			avail += pcm->io_hw_boundary;
+		else if ((snd_pcm_uframes_t) avail >= pcm->io_hw_boundary)
+			avail -= pcm->io_hw_boundary;
+	}
+	else {
+		avail = hw_ptr - appl_ptr;
+		if (avail < 0)
+			avail += pcm->io_hw_boundary;
+	}
+
+	return avail;
+}
+
+/* The number of frames available to the bluealsa I/O thread. Can never be
+ * larger than the buffer size. */
 static snd_pcm_uframes_t snd_pcm_ioplug_hw_avail(const snd_pcm_ioplug_t * const io,
 		const snd_pcm_uframes_t hw_ptr, const snd_pcm_uframes_t appl_ptr) {
 	struct bluealsa_pcm *pcm = io->private_data;
-	snd_pcm_sframes_t diff;
-	if (io->stream == SND_PCM_STREAM_PLAYBACK)
-		diff = appl_ptr - hw_ptr;
-	else
-		diff = io->buffer_size - hw_ptr + appl_ptr;
-	if (diff < 0)
-		diff += pcm->io_hw_boundary;
-	snd_pcm_uframes_t diff_ = diff;
-	return diff_ <= io->buffer_size ? diff_ : 0;
+	snd_pcm_uframes_t avail;
+
+	avail = snd_pcm_ioplug_avail(ioplug, hw_ptr, appl_ptr);
+
+	if (avail > io->buffer_size)
+		return 0;
+
+	return io->buffer_size - avail;
 }
 #endif
 
@@ -547,15 +574,27 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 			io_hw_ptr = pcm->io_hw_ptr;
 		}
 
-		/* There are 2 reasons why the number of available frames may be
-		 * zero: XRUN or drained final samples; we set the HW pointer to
-		 * -1 to indicate we have no work to do. */
-		snd_pcm_uframes_t avail;
-		if ((avail = snd_pcm_ioplug_hw_avail(io, io_hw_ptr, io->appl_ptr)) == 0) {
-			pcm->io_hw_ptr = io_hw_ptr = -1;
-			io_thread_update_delay(pcm, io_hw_ptr);
-			eventfd_write(pcm->event_fd, 1);
-			continue;
+		snd_pcm_uframes_t appl_avail = snd_pcm_ioplug_avail(io, io_hw_ptr, io->appl_ptr);
+		snd_pcm_uframes_t avail = appl_avail < io->buffer_size ? io->buffer_size - appl_avail : io->period_size;
+		snd_pcm_uframes_t stop_threshold = io->state == SND_PCM_STATE_DRAINING ? io->buffer_size : pcm->io_stop_threshold;
+
+		/* If the stop_threshold == boundary then we ignore the application
+		 * pointer and continue to send one period of frames on each iteration.
+		 */
+		if (stop_threshold == pcm->io_hw_boundary) {
+			appl_avail = io->buffer_size;
+			avail = io->period_size;
+		}
+		else {
+			/* Otherwise we must stop the pcm when the stop threshold is
+			 * reached; we set the HW pointer to -1 to indicate we have no work
+			 * to do. */
+			if (appl_avail >= stop_threshold) {
+				pcm->io_hw_ptr = io_hw_ptr = -1;
+				io_thread_update_delay(pcm, io_hw_ptr);
+				eventfd_write(pcm->event_fd, 1);
+				continue;
+			}
 		}
 
 		/* current offset of the head pointer in the IO buffer */
@@ -602,7 +641,9 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 
 		/* Wake application thread if enough space/frames is available, or
 		 * io_period_event is set. */
-		if (frames + io->buffer_size - avail >= pcm->io_avail_min || pcm->io_period_event)
+		if (frames + appl_avail >= pcm->io_avail_min ||
+					pcm->io_stop_threshold > io->buffer_size ||
+					pcm->io_period_event)
 			eventfd_write(pcm->event_fd, 1);
 
 	}
@@ -637,7 +678,7 @@ static int bluealsa_start(snd_pcm_ioplug_t *io) {
 	 * so, to be consistent with results from testing the hw plugin, when
 	 * snd_pcm_start() is called on a playback stream with the buffer empty we
 	 * leave the state unchanged (SND_PCM_STATE_PREPARED) but return -EPIPE. */
-	if (io->stream == SND_PCM_STREAM_PLAYBACK && io->appl_ptr == 0)
+	if (io->stream == SND_PCM_STREAM_PLAYBACK && io->appl_ptr == 0 && pcm->io_stop_threshold < pcm->io_hw_boundary)
 			return -EPIPE;
 
 	/* If the IO thread is already started, skip thread creation. Otherwise,
@@ -1026,6 +1067,14 @@ static int bluealsa_sw_params(snd_pcm_ioplug_t *io, snd_pcm_sw_params_t *params)
 	if (avail_min != pcm->io_avail_min) {
 		debug2("Changing SW avail min: %zu -> %zu", pcm->io_avail_min, avail_min);
 		pcm->io_avail_min = avail_min;
+	}
+	snd_pcm_uframes_t stop_threshold;
+	snd_pcm_sw_params_get_stop_threshold(params, &stop_threshold);
+	if (stop_threshold >= pcm->io_hw_boundary)
+		stop_threshold = pcm->io_hw_boundary;
+	if (stop_threshold != pcm->io_stop_threshold) {
+		debug2("Changing SW stop threshold: %zu -> %zu", pcm->io_stop_threshold, stop_threshold);
+		pcm->io_stop_threshold = stop_threshold;
 	}
 
 	int period_event;
@@ -1428,12 +1477,7 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 				ready = false;
 				break;
 			case SND_PCM_STATE_PREPARED:
-				/* capture poll should block forever */
-				if (io->stream == SND_PCM_STREAM_CAPTURE) {
-					ready = false;
-					*revents = 0;
-				}
-				else if ((snd_pcm_uframes_t)avail < pcm->io_avail_min) {
+				if ((snd_pcm_uframes_t)avail < pcm->io_avail_min) {
 					ready = false;
 					*revents = 0;
 				}
