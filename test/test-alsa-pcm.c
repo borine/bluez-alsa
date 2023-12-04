@@ -1229,6 +1229,106 @@ CK_START_TEST(test_playback_period_event) {
 
 } CK_END_TEST
 
+CK_START_TEST(test_playback_stop_threshold) {
+
+	unsigned int buffer_time = 200000;
+	unsigned int period_time = 25000;
+	snd_pcm_uframes_t buffer_size;
+	snd_pcm_uframes_t period_size;
+	struct spawn_process sp_ba_mock;
+	snd_pcm_t *pcm = NULL;
+	size_t i;
+
+	ck_assert_int_eq(test_pcm_open(&sp_ba_mock, &pcm, SND_PCM_STREAM_PLAYBACK), 0);
+	ck_assert_int_eq(set_hw_params(pcm, pcm_format, pcm_channels, pcm_rate,
+				&buffer_time, &period_time), 0);
+	ck_assert_int_eq(snd_pcm_get_params(pcm, &buffer_size, &period_size), 0);
+
+	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
+
+	snd_pcm_sw_params_t *sw_params;
+	snd_pcm_sw_params_alloca(&sw_params);
+	ck_assert_int_eq(snd_pcm_sw_params_current(pcm, sw_params), 0);
+
+	/* setup PCM not to start automatically */
+	snd_pcm_uframes_t boundary;
+	ck_assert_int_eq(snd_pcm_sw_params_get_boundary(sw_params, &boundary), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_start_threshold(pcm, sw_params, boundary), 0);
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, sw_params), 0);
+
+	/* write four periods */
+	for (i = 0; i < 4; i++)
+		ck_assert_int_eq(snd_pcm_writei(pcm, test_sine_s16le(period_size), period_size), period_size);
+
+	/* setup PCM to stop before the buffer is emptied */
+	ck_assert_int_eq(snd_pcm_sw_params_set_stop_threshold(pcm, sw_params, buffer_size - 2 * period_size), 0);
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, sw_params), 0);
+
+	/* start the PCM */
+	ck_assert_int_eq(snd_pcm_start(pcm), 0);
+
+	/* check PCM is running */
+	ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_RUNNING);
+
+	/* sleep for just over 2 periods */
+	usleep(100 + 2 * period_time);
+
+	/* check that PCM has stopped */
+	ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_XRUN);
+	ck_assert_int_eq(snd_pcm_avail(pcm), -EPIPE);
+
+	/* reset the PCM */
+	ck_assert_int_eq(snd_pcm_drop(pcm), 0);
+	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
+
+	/* setup PCM to stop three periods after the buffer is emptied */
+	ck_assert_int_eq(snd_pcm_sw_params_set_stop_threshold(pcm, sw_params, buffer_size + 3 * period_size), 0);
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, sw_params), 0);
+
+	/* write one period */
+	ck_assert_int_eq(snd_pcm_writei(pcm, test_sine_s16le(period_size), period_size), period_size);
+
+	/* start the PCM */
+	ck_assert_int_eq(snd_pcm_start(pcm), 0);
+
+	/* check PCM is running */
+	ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_RUNNING);
+
+	/* sleep for just over two periods */
+	usleep(100 + 2 * period_time);
+
+	/* check PCM is still running */
+	ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_RUNNING);
+
+	/* sleep for two more periods */
+	usleep(2 * period_time);
+
+	/* check PCM has stopped */
+	ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_XRUN);
+
+	/* reset the PCM */
+	ck_assert_int_eq(snd_pcm_drop(pcm), 0);
+	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
+
+	/* setup PCM to run continuously */
+	ck_assert_int_eq(snd_pcm_sw_params_set_stop_threshold(pcm, sw_params, boundary), 0);
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, sw_params), 0);
+
+	/* start the PCM */
+	ck_assert_int_eq(snd_pcm_start(pcm), 0);
+
+	/* check PCM is running */
+	ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_RUNNING);
+
+	/* sleep for more than the buffer time */
+	usleep(buffer_time + period_time);
+
+	/* check PCM is still running */
+	ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_RUNNING);
+
+	ck_assert_int_eq(test_pcm_close(&sp_ba_mock, pcm), 0);
+
+} CK_END_TEST
 
 int main(int argc, char *argv[]) {
 	preload(argc, argv, ".libs/libaloader.so");
@@ -1322,6 +1422,7 @@ int main(int argc, char *argv[]) {
 		tcase_add_test(tc, test_playback_underrun);
 		tcase_add_test(tc, ba_test_playback_device_unplug);
 		tcase_add_test(tc, test_playback_period_event);
+		tcase_add_test(tc, test_playback_stop_threshold);
 		suite_add_tcase(s, tc);
 	}
 
