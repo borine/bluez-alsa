@@ -113,6 +113,14 @@ struct bluealsa_pcm {
 	atomic_int io_period_event;
 	/* Permit the application to modify XRUN behavior. */
 	_Atomic snd_pcm_uframes_t io_stop_threshold;
+	_Atomic snd_pcm_uframes_t io_silence_threshold;
+	_Atomic snd_pcm_uframes_t io_silence_size;
+
+	/* When the silence_size sw param is enabled, we maintain a region of
+	 * silence in the ring buffer, defined by its start offset and length */
+	snd_pcm_uframes_t silence_start;
+	snd_pcm_uframes_t silence_len;
+
 	pthread_t io_thread;
 	bool io_started;
 
@@ -491,7 +499,8 @@ static bool io_thread_write(struct bluealsa_pcm *pcm,
 
 	snd_pcm_uframes_t frames_transfered = 0;
 	while (frames_transfered < frames) {
-		char *pos = pcm->io_hw_buffer + offset * pcm->frame_size;
+		char *start = pcm->io_hw_buffer + offset * pcm->frame_size;
+		char *pos = start;
 		size_t len = chunk * pcm->frame_size;
 		do {
 			if ((ret = write(pcm->ba_pcm_fd, pos, len)) == -1) {
@@ -505,12 +514,60 @@ static bool io_thread_write(struct bluealsa_pcm *pcm,
 			len -= ret;
 		} while (len != 0);
 
+		/* Special case: fill just-written buffer frames with silence.*/
+		if (pcm->io_silence_size >= pcm->io_hw_boundary)
+			snd_pcm_format_set_silence(pcm->io.format, start, chunk * pcm->io.channels);
+
 		frames_transfered += chunk;
 		offset = 0;
 		chunk = frames - chunk;
 	}
 
 	return true;
+}
+
+static void bluealsa_update_silence_region(snd_pcm_ioplug_t *io, snd_pcm_uframes_t appl_ptr) {
+	struct bluealsa_pcm *pcm = io->private_data;
+	if (appl_ptr != pcm->silence_start) {
+		snd_pcm_sframes_t silence_lost = appl_ptr - pcm->silence_start;
+		if (silence_lost < 0)
+			silence_lost += pcm->io_hw_boundary;
+		if (silence_lost < (snd_pcm_sframes_t)pcm->silence_len)
+			pcm->silence_len -= silence_lost;
+		else
+			pcm->silence_len = 0;
+
+		pcm->silence_start = appl_ptr;
+	}
+}
+
+/**
+ * Overwrite a section of the ring buffer with silence. */
+static void bluealsa_silence(snd_pcm_ioplug_t *io, snd_pcm_uframes_t appl_ptr, snd_pcm_uframes_t hw_ptr) {
+	struct bluealsa_pcm *pcm = io->private_data;
+	snd_pcm_uframes_t frames = 0;
+
+	if (pcm->io_silence_threshold > 0) {
+		snd_pcm_sframes_t hw_avail = appl_ptr - hw_ptr;
+		if (hw_avail < 0)
+			hw_avail += pcm->io_hw_boundary;
+		snd_pcm_uframes_t noise_distance = hw_avail + pcm->silence_len;
+		if (noise_distance < pcm->io_silence_threshold) {
+			frames = pcm->io_silence_threshold - noise_distance;
+			if (frames > pcm->io_silence_size)
+				frames = pcm->io_silence_size;
+		}
+	}
+	else {
+		frames = io->buffer_size + hw_ptr - appl_ptr;
+		if (frames > io->buffer_size)
+			frames %= io->buffer_size;
+	}
+
+	snd_pcm_uframes_t offset = (pcm->silence_start + pcm->silence_len) % io->buffer_size;
+	pthread_mutex_lock(&pcm->mutex);
+	snd_pcm_areas_silence(pcm->io_hw_areas, offset, io->channels, frames, io->format);
+	pthread_mutex_unlock(&pcm->mutex);
 }
 
 /**
@@ -574,7 +631,8 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 			io_hw_ptr = pcm->io_hw_ptr;
 		}
 
-		snd_pcm_uframes_t appl_avail = snd_pcm_ioplug_avail(io, io_hw_ptr, io->appl_ptr);
+		snd_pcm_sframes_t appl_ptr = io->appl_ptr;
+		snd_pcm_uframes_t appl_avail = snd_pcm_ioplug_avail(io, io_hw_ptr, appl_ptr);
 		snd_pcm_uframes_t avail = appl_avail < io->buffer_size ? io->buffer_size - appl_avail : io->period_size;
 		snd_pcm_uframes_t stop_threshold = io->state == SND_PCM_STATE_DRAINING ? io->buffer_size : pcm->io_stop_threshold;
 
@@ -631,7 +689,14 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 		else {
 			if (!io_thread_write(pcm, offset, frames))
 				goto fail;
+			/* synchronize playback time */
 			asrsync_sync(&asrs, frames);
+
+			/* Apply silence sw parameter settings */
+			if (io->state == SND_PCM_STATE_RUNNING &&
+					pcm->io_silence_size > 0 &&
+					pcm->io_silence_size < pcm->io_hw_boundary)
+				bluealsa_silence(io, appl_ptr, io_hw_ptr);
 		}
 
 		io_thread_update_delay(pcm, io_hw_ptr);
@@ -680,6 +745,15 @@ static int bluealsa_start(snd_pcm_ioplug_t *io) {
 	 * leave the state unchanged (SND_PCM_STATE_PREPARED) but return -EPIPE. */
 	if (io->stream == SND_PCM_STREAM_PLAYBACK && io->appl_ptr == 0 && pcm->io_stop_threshold < pcm->io_hw_boundary)
 			return -EPIPE;
+
+	/* Special case: fill unused portion of buffer with silence.*/
+	if (io->stream == SND_PCM_STREAM_PLAYBACK &&
+				pcm->io_silence_size >= pcm->io_hw_boundary &&
+				pcm->io_silence_threshold == 0) {
+		const size_t offset = io->appl_ptr * pcm->frame_size;
+		unsigned int samples = (io->buffer_size - io->appl_ptr) * io->channels;
+		snd_pcm_format_set_silence(io->format, pcm->io_hw_buffer + offset, samples);
+	}
 
 	/* If the IO thread is already started, skip thread creation. Otherwise,
 	 * we might end up with a bunch of IO threads reading or writing to the
@@ -773,10 +847,20 @@ static snd_pcm_sframes_t bluealsa_transfer(snd_pcm_ioplug_t *io,
 	if (io->stream == SND_PCM_STREAM_CAPTURE)
 		ret = snd_pcm_areas_copy_wrap(areas, offset, size + offset, pcm->io_hw_areas,
 				io->appl_ptr % io->buffer_size, io->buffer_size, io->channels, size, io->format);
-	else
+	else {
 		ret = snd_pcm_areas_copy_wrap(pcm->io_hw_areas, io->appl_ptr % io->buffer_size,
 				io->buffer_size, areas, offset, size + offset, io->channels, size, io->format);
 
+		if (ret > 0) {
+			/* This transfer may have overwritten part of our silence region */
+			snd_pcm_uframes_t new_appl_ptr = io->appl_ptr + ret;
+			if (new_appl_ptr >= pcm->io_hw_boundary)
+				new_appl_ptr -= pcm->io_hw_boundary;
+
+			bluealsa_update_silence_region(io, new_appl_ptr);
+		}
+
+	}
 	pthread_mutex_unlock(&pcm->mutex);
 
 	if (ret < 0)
@@ -1058,12 +1142,38 @@ static int bluealsa_sw_params(snd_pcm_ioplug_t *io, snd_pcm_sw_params_t *params)
 	snd_pcm_sw_params_get_boundary(params, &boundary);
 	pcm->io_hw_boundary = boundary;
 
+	snd_pcm_uframes_t silence_threshold;
+	snd_pcm_sw_params_get_silence_threshold(params, &silence_threshold);
+	snd_pcm_uframes_t silence_size;
+	snd_pcm_sw_params_get_silence_size(params, &silence_size);
+	if (silence_size >= boundary) {
+		if (silence_threshold != 0)
+			return -EINVAL;
+	}
+	else if (silence_size > silence_threshold)
+		return -EINVAL;
+
+	if (silence_threshold != pcm->io_silence_threshold) {
+		debug2("Changing SW silence threshold: %zu -> %zu", pcm->io_silence_threshold, silence_threshold);
+		pcm->io_silence_threshold = silence_threshold;
+	}
+	if (silence_size != pcm->io_silence_size) {
+		debug2("Changing SW silence size: %zu -> %zu", pcm->io_silence_size, silence_size);
+		pcm->io_silence_size = silence_size;
+		if (io->stream == SND_PCM_STREAM_PLAYBACK && pcm->io_silence_size >= pcm->io_hw_boundary) {
+			snd_pcm_sframes_t appl_ptr = io->appl_ptr;
+			bluealsa_update_silence_region(io, appl_ptr);
+			bluealsa_silence(io, appl_ptr, pcm->io_hw_ptr);
+		}
+	}
+
 	snd_pcm_uframes_t avail_min;
 	snd_pcm_sw_params_get_avail_min(params, &avail_min);
 	if (avail_min != pcm->io_avail_min) {
 		debug2("Changing SW avail min: %zu -> %zu", pcm->io_avail_min, avail_min);
 		pcm->io_avail_min = avail_min;
 	}
+
 	snd_pcm_uframes_t stop_threshold;
 	snd_pcm_sw_params_get_stop_threshold(params, &stop_threshold);
 	if (stop_threshold >= pcm->io_hw_boundary)
@@ -1094,6 +1204,11 @@ static int bluealsa_prepare(snd_pcm_ioplug_t *io) {
 
 	/* initialize ring buffer */
 	pcm->io_hw_ptr = 0;
+
+	if (pcm->io_silence_size >= pcm->io_hw_boundary) {
+		/* Special case: fill buffer with silence.*/
+		snd_pcm_format_set_silence(io->format, pcm->io_hw_buffer,  io->buffer_size * io->channels);
+	}
 
 	if (io->stream == SND_PCM_STREAM_PLAYBACK) {
 		/* Indicate that our PCM is ready for IO, even though is is not 100%
