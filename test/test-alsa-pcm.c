@@ -1330,6 +1330,59 @@ CK_START_TEST(test_playback_stop_threshold) {
 
 } CK_END_TEST
 
+CK_START_TEST(test_playback_silence) {
+
+	unsigned int buffer_time = 200000;
+	unsigned int period_time = 25000;
+	snd_pcm_uframes_t buffer_size;
+	snd_pcm_uframes_t period_size;
+	struct spawn_process sp_ba_mock;
+	snd_pcm_t *pcm = NULL;
+
+	ck_assert_int_eq(test_pcm_open(&sp_ba_mock, &pcm, SND_PCM_STREAM_PLAYBACK), 0);
+	ck_assert_int_eq(set_hw_params(pcm, pcm_format, pcm_channels, pcm_rate,
+				&buffer_time, &period_time), 0);
+	ck_assert_int_eq(snd_pcm_get_params(pcm, &buffer_size, &period_size), 0);
+	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
+
+	snd_pcm_sw_params_t *sw_params;
+	snd_pcm_sw_params_alloca(&sw_params);
+	ck_assert_int_eq(snd_pcm_sw_params_current(pcm, sw_params), 0);
+
+	/* Set silence_size greater than silence_threshold */
+	ck_assert_int_eq(snd_pcm_sw_params_set_silence_size(pcm, sw_params, 2 * period_size), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_silence_threshold(pcm, sw_params, period_size), 0);
+
+	/* check the params are rejected */
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, sw_params), -EINVAL);
+
+	/* set silence_size to boundary with silence threshold non-zero */
+	snd_pcm_uframes_t boundary;
+	ck_assert_int_eq(snd_pcm_sw_params_get_boundary(sw_params, &boundary), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_silence_size(pcm, sw_params, boundary), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_silence_threshold(pcm, sw_params, period_size), 0);
+
+	/* check the params are rejected */
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, sw_params), -EINVAL);
+
+	/* set silence_size to boundary with silence threshold zero */
+	ck_assert_int_eq(snd_pcm_sw_params_set_silence_threshold(pcm, sw_params, 0), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_silence_size(pcm, sw_params, boundary), 0);
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, sw_params), 0);
+
+/* test here ?? */
+
+	/* set silence_size and silence threshold to period_size */
+	ck_assert_int_eq(snd_pcm_sw_params_set_silence_threshold(pcm, sw_params, period_size), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_silence_size(pcm, sw_params, period_size), 0);
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, sw_params), 0);
+
+/* test here ?? */
+
+	ck_assert_int_eq(test_pcm_close(&sp_ba_mock, pcm), 0);
+
+} CK_END_TEST
+
 int main(int argc, char *argv[]) {
 	preload(argc, argv, ".libs/libaloader.so");
 
@@ -1423,6 +1476,7 @@ int main(int argc, char *argv[]) {
 		tcase_add_test(tc, ba_test_playback_device_unplug);
 		tcase_add_test(tc, test_playback_period_event);
 		tcase_add_test(tc, test_playback_stop_threshold);
+		tcase_add_test(tc, test_playback_silence);
 		suite_add_tcase(s, tc);
 	}
 
