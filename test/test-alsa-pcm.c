@@ -250,6 +250,18 @@ CK_START_TEST(test_capture_start) {
 	ck_assert_int_eq(snd_pcm_delay(pcm, &delay), 0);
 	ck_assert_int_ge(delay, avail);
 
+	/* check automatic PCM start */
+	ck_assert_int_eq(snd_pcm_drop(pcm), 0);
+	snd_pcm_sw_params_t *sw_params;
+	snd_pcm_sw_params_alloca(&sw_params);
+	ck_assert_int_eq(snd_pcm_sw_params_current(pcm, sw_params), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_start_threshold(pcm, sw_params, period_size), 0);
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, sw_params), 0);
+	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
+	ck_assert_int_eq(snd_pcm_avail(pcm), 0);
+	for (int i = 0; i < 2; i++)
+		ck_assert_int_eq(snd_pcm_readi(pcm, pcm_buffer, period_size), period_size);
+
 	ck_assert_int_eq(test_pcm_close(&sp_ba_mock, pcm), 0);
 
 } CK_END_TEST
@@ -732,7 +744,7 @@ CK_START_TEST(test_playback_start) {
 	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
 
 	/* fill-in buffer without starting playback */
-	for (i = 0; i < (buffer_size - 10) / period_size; i++)
+	for (i = 1; i < (buffer_size / period_size); i++)
 		ck_assert_int_eq(snd_pcm_writei(pcm, test_sine_s16le(period_size), period_size), period_size);
 
 	/* wait some time to make sure playback was not started */
@@ -748,6 +760,12 @@ CK_START_TEST(test_playback_start) {
 	/* start playback - start threshold will be exceeded */
 	ck_assert_int_eq(snd_pcm_writei(pcm, test_sine_s16le(period_size), period_size), period_size);
 	ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_RUNNING);
+
+	/* test starting with empty buffer */
+	ck_assert_int_eq(snd_pcm_drop(pcm), 0);
+	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
+	ck_assert_int_eq(snd_pcm_start(pcm), -EPIPE);
+	ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_PREPARED);
 
 	ck_assert_int_eq(test_pcm_close(&sp_ba_mock, pcm), 0);
 
@@ -807,7 +825,7 @@ CK_START_TEST(test_playback_drain_not_started) {
 	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
 
 	/* fill-in buffer without starting playback */
-	for (size_t i = 0; i < (buffer_size - 10) / period_size; i++)
+	for (size_t i = 1; i < (buffer_size / period_size); i++)
 		ck_assert_int_eq(snd_pcm_writei(pcm, test_sine_s16le(period_size), period_size), period_size);
 
 	/* drain PCM buffer and stop playback */
