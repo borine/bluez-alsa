@@ -387,6 +387,14 @@ static int bluealsa_start(snd_pcm_ioplug_t *io) {
 	struct bluealsa_pcm *pcm = io->private_data;
 	debug2("Starting");
 
+	/* ALSA documentation does not specify failure states for snd_pcm_start(),
+	 * so, to be consistent with results from testing the hw plugin, when
+	 * snd_pcm_start() is called on a playback stream with the buffer empty we
+	 * leave the state unchanged (SND_PCM_STATE_PREPARED) but return -EPIPE. */
+	if (io->stream == SND_PCM_STREAM_PLAYBACK &&
+			snd_pcm_ioplug_hw_avail(io, pcm->io_hw_ptr, io->appl_ptr) == 0)
+		return -EPIPE;
+
 	/* If the IO thread is already started, skip thread creation. Otherwise,
 	 * we might end up with a bunch of IO threads reading or writing to the
 	 * same FIFO simultaneously. Instead, just send resume signal. */
@@ -689,6 +697,7 @@ static int bluealsa_prepare(snd_pcm_ioplug_t *io) {
 
 static int bluealsa_drain(snd_pcm_ioplug_t *io) {
 	struct bluealsa_pcm *pcm = io->private_data;
+	int ret;
 	debug2("Draining");
 
 	if (!pcm->connected) {
@@ -709,7 +718,10 @@ static int bluealsa_drain(snd_pcm_ioplug_t *io) {
 	 * to the FIFO by the I/O thread. It is possible that the client has called
 	 * snd_pcm_drain() without the start_threshold having been reached, or
 	 * while paused, so we must first ensure that the IO thread is running. */
-	if (bluealsa_start(io) < 0) {
+	if ((ret = bluealsa_start(io)) == -EPIPE)
+		/* buffer is empty - nothing to drain */
+		return 0;
+	else if (ret < 0) {
 		/* Insufficient resources to start a new thread - so we have no choice
 		 * but to drop this stream. */
 		bluealsa_stop(io);
@@ -723,7 +735,6 @@ static int bluealsa_drain(snd_pcm_ioplug_t *io) {
 
 	struct pollfd pfd = { pcm->event_fd, POLLIN, 0 };
 	bool aborted = false;
-	int ret = 0;
 
 	snd_pcm_sframes_t hw_ptr;
 	while ((hw_ptr = bluealsa_pointer(io)) >= 0 && io->state == SND_PCM_STATE_DRAINING) {
