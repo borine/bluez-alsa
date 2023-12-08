@@ -1,6 +1,6 @@
 /*
  * BlueALSA - asound/bluealsa-pcm.c
- * Copyright (c) 2016-2024 Arkadiusz Bokowy
+ * Copyright (c) 2016-2025 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -391,6 +391,13 @@ fail:
 static int bluealsa_start(snd_pcm_ioplug_t *io) {
 	struct bluealsa_pcm *pcm = io->private_data;
 	debug2("Starting");
+
+	/* ALSA documentation does not specify failure states for snd_pcm_start(),
+	 * so, to be consistent with results from testing the hw plugin, when
+	 * snd_pcm_start() is called on a playback stream with the buffer empty we
+	 * leave the state unchanged (SND_PCM_STATE_PREPARED) but return -EPIPE. */
+	if (io->stream == SND_PCM_STREAM_PLAYBACK && io->appl_ptr == 0)
+			return -EPIPE;
 
 	/* If the IO thread is already started, skip thread creation. Otherwise,
 	 * we might end up with a bunch of IO threads reading or writing to the
