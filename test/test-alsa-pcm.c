@@ -1151,6 +1151,85 @@ CK_START_TEST(ba_test_playback_device_unplug) {
 
 } CK_END_TEST
 
+CK_START_TEST(test_playback_period_event) {
+
+	unsigned int buffer_time = 200000;
+	unsigned int period_time = 25000;
+	unsigned int periods;
+	snd_pcm_uframes_t buffer_size;
+	snd_pcm_uframes_t period_size;
+	struct spawn_process sp_ba_mock;
+	snd_pcm_t *pcm = NULL;
+	size_t i;
+	struct timespec t0, t, diff;
+	snd_pcm_sw_params_t *swparams;
+
+	ck_assert_int_eq(test_pcm_open(&sp_ba_mock, &pcm, SND_PCM_STREAM_PLAYBACK), 0);
+	ck_assert_int_eq(set_hw_params(pcm, pcm_format, pcm_channels, pcm_rate,
+				&buffer_time, &period_time), 0);
+	ck_assert_int_eq(snd_pcm_get_params(pcm, &buffer_size, &period_size), 0);
+	periods = buffer_size / period_size;
+
+	/* Enable period_event, disable avail_min event and disable auto-start */
+	snd_pcm_sw_params_alloca(&swparams);
+	snd_pcm_uframes_t boundary;
+	ck_assert_int_eq(snd_pcm_sw_params_current(pcm, swparams), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_get_boundary(swparams, &boundary), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_period_event(pcm, swparams, 1), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_avail_min(pcm, swparams, boundary), 0);
+	ck_assert_int_eq(snd_pcm_sw_params_set_start_threshold(pcm, swparams, boundary), 0);
+	ck_assert_int_eq(snd_pcm_sw_params(pcm, swparams), 0);
+
+	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
+
+	/* fill buffer with as many full periods as possible */
+	for (i = 0; i < periods; i++)
+		ck_assert_int_eq(snd_pcm_writei(pcm, test_sine_s16le(period_size), period_size), period_size);
+
+	/* check that the pcm has not started */
+	ck_assert_int_eq(buffer_size - snd_pcm_avail(pcm), i * period_size);
+	ck_assert_int_eq(snd_pcm_state(pcm), SND_PCM_STATE_PREPARED);
+
+	/* There should be no poll event pending */
+	struct pollfd pfds[8];
+	unsigned short revents;
+	int count = snd_pcm_poll_descriptors_count(pcm);
+	ck_assert_int_eq(snd_pcm_poll_descriptors(pcm, pfds, ARRAYSIZE(pfds)), count);
+	int rv;
+	ck_assert_int_ne(rv = poll(pfds, count, 0), -1);
+	snd_pcm_poll_descriptors_revents(pcm, pfds, count, &revents);
+	ck_assert_int_eq(revents, 0);
+
+	/* start the pcm */
+	ck_assert_int_eq(snd_pcm_start(pcm), 0);
+	ck_assert_int_eq(snd_pcm_state(pcm), SND_PCM_STATE_RUNNING);
+
+	/* get current timestamp */
+	gettimestamp(&t0);
+
+	/* check that each period interval yields 1 POLLOUT event. Do not allow the
+	 * buffer to run empty as that may generate events other than the period
+	 * event. */
+	periods--;
+	i = 0;
+	do {
+		ck_assert_int_ne(rv = poll(pfds, count, -1), -1);
+		snd_pcm_poll_descriptors_revents(pcm, pfds, count, &revents);
+		if (revents & POLLERR)
+			break;
+		if (revents & POLLOUT)
+			i++;
+		gettimestamp(&t);
+		difftimespec(&t0, &t, &diff);
+	} while (diff.tv_sec * 1000000 + diff.tv_nsec / 1000 < periods * period_time);
+
+	ck_assert_int_eq(i, periods);
+
+	ck_assert_int_eq(test_pcm_close(&sp_ba_mock, pcm), 0);
+
+} CK_END_TEST
+
+
 int main(int argc, char *argv[]) {
 	preload(argc, argv, ".libs/libaloader.so");
 
@@ -1242,6 +1321,7 @@ int main(int argc, char *argv[]) {
 		tcase_add_test(tc, test_playback_reset);
 		tcase_add_test(tc, test_playback_underrun);
 		tcase_add_test(tc, ba_test_playback_device_unplug);
+		tcase_add_test(tc, test_playback_period_event);
 		suite_add_tcase(s, tc);
 	}
 
