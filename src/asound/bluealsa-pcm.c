@@ -99,6 +99,8 @@ struct bluealsa_pcm {
 	_Atomic snd_pcm_uframes_t io_hw_boundary;
 	/* Permit the application to modify the frequency of poll() events. */
 	_Atomic snd_pcm_uframes_t io_avail_min;
+	/* Raise poll event at every period end */
+	atomic_int io_period_event;
 	pthread_t io_thread;
 	bool io_started;
 
@@ -363,8 +365,9 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 		/* Make the new HW pointer value visible to the ioplug. */
 		pcm->io_hw_ptr = io_hw_ptr;
 
-		/* Wake application thread if enough space/frames is available. */
-		if (frames + io->buffer_size - avail >= pcm->io_avail_min)
+		/* Wake application thread if enough space/frames is available, or
+		 * io_period_event is set. */
+		if (frames + io->buffer_size - avail >= pcm->io_avail_min || pcm->io_period_event)
 			eventfd_write(pcm->event_fd, 1);
 
 	}
@@ -699,6 +702,13 @@ static int bluealsa_sw_params(snd_pcm_ioplug_t *io, snd_pcm_sw_params_t *params)
 	if (avail_min != pcm->io_avail_min) {
 		debug2("Changing SW avail min: %zu -> %zu", pcm->io_avail_min, avail_min);
 		pcm->io_avail_min = avail_min;
+	}
+
+	int period_event;
+	snd_pcm_sw_params_get_period_event(params, &period_event);
+	if (period_event != pcm->io_period_event) {
+		debug2("Changing SW period event: %d -> %d", pcm->io_period_event, period_event);
+		pcm->io_period_event = period_event;
 	}
 
 	return 0;
@@ -1115,11 +1125,16 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 					ready = false;
 					*revents = 0;
 				}
+				else if ((snd_pcm_uframes_t)avail < pcm->io_avail_min) {
+					ready = false;
+					*revents = 0;
+				}
 				break;
 			case SND_PCM_STATE_RUNNING:
 				if ((snd_pcm_uframes_t)avail < pcm->io_avail_min) {
 					ready = false;
-					*revents = 0;
+					if ((snd_pcm_uframes_t)avail < io->period_size || !pcm->io_period_event)
+						*revents = 0;
 				}
 				break;
 			case SND_PCM_STATE_DRAINING:
