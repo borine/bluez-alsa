@@ -38,7 +38,6 @@
 #if ENABLE_MSBC
 # include "codec-msbc.h"
 #endif
-#include "codec-sbc.h"
 #include "hci.h"
 #include "hfp.h"
 #include "io.h"
@@ -154,8 +153,8 @@ static void *sco_dispatcher_thread(struct ba_adapter *a) {
 
 		pthread_mutex_unlock(&t->bt_fd_mtx);
 
-		ba_transport_thread_state_set_idle(&t->thread_enc);
-		ba_transport_thread_state_set_idle(&t->thread_dec);
+		ba_transport_pcm_state_set_idle(&t->sco.pcm_spk);
+		ba_transport_pcm_state_set_idle(&t->sco.pcm_mic);
 		ba_transport_start(t);
 
 cleanup:
@@ -232,7 +231,6 @@ static void *sco_cvsd_enc_thread(struct ba_transport_pcm *t_pcm) {
 	pthread_cleanup_push(PTHREAD_CLEANUP(ba_transport_pcm_thread_cleanup), t_pcm);
 
 	struct ba_transport *t = t_pcm->t;
-	struct ba_transport_thread *th = t_pcm->th;
 	struct io_poll io = { .timeout = -1 };
 
 	const size_t mtu_samples = t->mtu_write / sizeof(int16_t);
@@ -248,7 +246,7 @@ static void *sco_cvsd_enc_thread(struct ba_transport_pcm *t_pcm) {
 	}
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
-	for (ba_transport_thread_state_set_running(th);;) {
+	for (ba_transport_pcm_state_set_running(t_pcm);;) {
 
 		ssize_t samples = ffb_len_in(&buffer);
 		switch (samples = io_poll_and_read_pcm(&io, t_pcm, buffer.tail, samples)) {
@@ -273,7 +271,7 @@ static void *sco_cvsd_enc_thread(struct ba_transport_pcm *t_pcm) {
 		while (input_samples >= mtu_samples) {
 
 			ssize_t ret;
-			if ((ret = io_bt_write(th, input, mtu_write)) <= 0) {
+			if ((ret = io_bt_write(t_pcm, input, mtu_write)) <= 0) {
 				if (ret == -1)
 					error("BT write error: %s", strerror(errno));
 				goto exit;
@@ -307,7 +305,6 @@ static void *sco_cvsd_dec_thread(struct ba_transport_pcm *t_pcm) {
 	pthread_cleanup_push(PTHREAD_CLEANUP(ba_transport_pcm_thread_cleanup), t_pcm);
 
 	struct ba_transport *t = t_pcm->t;
-	struct ba_transport_thread *th = t_pcm->th;
 	struct io_poll io = { .timeout = -1 };
 
 	const size_t mtu_samples = t->mtu_read / sizeof(int16_t);
@@ -322,10 +319,10 @@ static void *sco_cvsd_dec_thread(struct ba_transport_pcm *t_pcm) {
 	}
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
-	for (ba_transport_thread_state_set_running(th);;) {
+	for (ba_transport_pcm_state_set_running(t_pcm);;) {
 
 		ssize_t len = ffb_blen_in(&buffer);
-		if ((len = io_poll_and_read_bt(&io, th, buffer.tail, len)) == -1)
+		if ((len = io_poll_and_read_bt(&io, t_pcm, buffer.tail, len)) == -1)
 			error("BT poll and read error: %s", strerror(errno));
 		else if (len == 0)
 			goto exit;
@@ -372,20 +369,19 @@ static void *sco_msbc_enc_thread(struct ba_transport_pcm *t_pcm) {
 	pthread_cleanup_push(PTHREAD_CLEANUP(ba_transport_pcm_thread_cleanup), t_pcm);
 
 	struct ba_transport *t = t_pcm->t;
-	struct ba_transport_thread *th = t_pcm->th;
 	struct io_poll io = { .timeout = -1 };
 	const size_t mtu_write = t->mtu_write;
 
 	struct esco_msbc msbc = { .initialized = false };
 	pthread_cleanup_push(PTHREAD_CLEANUP(msbc_finish), &msbc);
 
-	if (msbc_init(&msbc) != 0) {
+	if ((errno = -msbc_init(&msbc)) != 0) {
 		error("Couldn't initialize mSBC codec: %s", strerror(errno));
 		goto fail_msbc;
 	}
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
-	for (ba_transport_thread_state_set_running(th);;) {
+	for (ba_transport_pcm_state_set_running(t_pcm);;) {
 
 		ssize_t samples = ffb_len_in(&msbc.pcm);
 		switch (samples = io_poll_and_read_pcm(&io, t_pcm, msbc.pcm.tail, samples)) {
@@ -408,7 +404,7 @@ static void *sco_msbc_enc_thread(struct ba_transport_pcm *t_pcm) {
 
 			int err;
 			if ((err = msbc_encode(&msbc)) < 0) {
-				error("mSBC encoding error: %s", sbc_strerror(err));
+				error("mSBC encoding error: %s", msbc_strerror(err));
 				break;
 			}
 
@@ -418,7 +414,7 @@ static void *sco_msbc_enc_thread(struct ba_transport_pcm *t_pcm) {
 			while (data_len >= mtu_write) {
 
 				ssize_t len;
-				if ((len = io_bt_write(th, data, mtu_write)) <= 0) {
+				if ((len = io_bt_write(t_pcm, data, mtu_write)) <= 0) {
 					if (len == -1)
 						error("BT write error: %s", strerror(errno));
 					goto exit;
@@ -459,22 +455,21 @@ static void *sco_msbc_dec_thread(struct ba_transport_pcm *t_pcm) {
 	pthread_cleanup_push(PTHREAD_CLEANUP(ba_transport_pcm_thread_cleanup), t_pcm);
 
 	struct ba_transport *t = t_pcm->t;
-	struct ba_transport_thread *th = t_pcm->th;
 	struct io_poll io = { .timeout = -1 };
 
 	struct esco_msbc msbc = { .initialized = false };
 	pthread_cleanup_push(PTHREAD_CLEANUP(msbc_finish), &msbc);
 
-	if (msbc_init(&msbc) != 0) {
+	if ((errno = -msbc_init(&msbc)) != 0) {
 		error("Couldn't initialize mSBC codec: %s", strerror(errno));
 		goto fail_msbc;
 	}
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
-	for (ba_transport_thread_state_set_running(th);;) {
+	for (ba_transport_pcm_state_set_running(t_pcm);;) {
 
 		ssize_t len = ffb_blen_in(&msbc.data);
-		if ((len = io_poll_and_read_bt(&io, th, msbc.data.tail, len)) == -1)
+		if ((len = io_poll_and_read_bt(&io, t_pcm, msbc.data.tail, len)) == -1)
 			error("BT poll and read error: %s", strerror(errno));
 		else if (len == 0)
 			goto exit;
@@ -492,7 +487,7 @@ static void *sco_msbc_dec_thread(struct ba_transport_pcm *t_pcm) {
 		while ((err = msbc_decode(&msbc)) > 0)
 			continue;
 		if (err < 0) {
-			error("mSBC decoding error: %s", sbc_strerror(err));
+			error("mSBC decoding error: %s", msbc_strerror(err));
 			continue;
 		}
 
@@ -592,14 +587,14 @@ int sco_transport_start(struct ba_transport *t) {
 	int rv = 0;
 
 	if (t->profile & BA_TRANSPORT_PROFILE_MASK_AG) {
-		rv |= ba_transport_pcm_start(&t->sco.pcm_spk, sco_enc_thread, "ba-sco-enc", true);
-		rv |= ba_transport_pcm_start(&t->sco.pcm_mic, sco_dec_thread, "ba-sco-dec", false);
+		rv |= ba_transport_pcm_start(&t->sco.pcm_spk, sco_enc_thread, "ba-sco-enc");
+		rv |= ba_transport_pcm_start(&t->sco.pcm_mic, sco_dec_thread, "ba-sco-dec");
 		return rv;
 	}
 
 	if (t->profile & BA_TRANSPORT_PROFILE_MASK_HF) {
-		rv |= ba_transport_pcm_start(&t->sco.pcm_spk, sco_dec_thread, "ba-sco-dec", true);
-		rv |= ba_transport_pcm_start(&t->sco.pcm_mic, sco_enc_thread, "ba-sco-enc", false);
+		rv |= ba_transport_pcm_start(&t->sco.pcm_spk, sco_dec_thread, "ba-sco-dec");
+		rv |= ba_transport_pcm_start(&t->sco.pcm_mic, sco_enc_thread, "ba-sco-enc");
 		return rv;
 	}
 

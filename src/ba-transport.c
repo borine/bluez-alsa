@@ -91,291 +91,16 @@ static int ba_transport_pcms_full_unlock(struct ba_transport *t) {
 	return -1;
 }
 
-static int transport_thread_init(
-		struct ba_transport_thread *th,
-		struct ba_transport *t) {
-
-	th->t = t;
-	th->state = BA_TRANSPORT_THREAD_STATE_TERMINATED;
-	th->bt_fd = -1;
-	th->pipe[0] = -1;
-	th->pipe[1] = -1;
-
-	pthread_mutex_init(&th->mutex, NULL);
-	pthread_cond_init(&th->cond, NULL);
-
-	if (pipe(th->pipe) == -1)
-		return -1;
-
-	return 0;
-}
-
-/**
- * Synchronous transport thread cancellation.
- *
- * Please be aware that when using this function caller shall not hold
- * any mutex which might be used in the IO thread. Mutex locking is not
- * a cancellation point, so the IO thread might get stuck - it will not
- * terminate, so join will not return either! */
-static void transport_thread_cancel(struct ba_transport_thread *th) {
-
-	pthread_mutex_lock(&th->mutex);
-
-	/* If the transport thread is in the idle state (i.e. it is not running),
-	 * we can mark it as terminated right away. */
-	if (th->state == BA_TRANSPORT_THREAD_STATE_IDLE) {
-		th->state = BA_TRANSPORT_THREAD_STATE_TERMINATED;
-		pthread_mutex_unlock(&th->mutex);
-		pthread_cond_broadcast(&th->cond);
-		return;
-	}
-
-	/* If this function was called from more than one thread at the same time
-	 * (e.g. from transport thread manager thread and from main thread due to
-	 * SIGTERM signal), wait until the IO thread terminates - this function is
-	 * supposed to be synchronous. */
-	if (th->state == BA_TRANSPORT_THREAD_STATE_JOINING) {
-		while (th->state != BA_TRANSPORT_THREAD_STATE_TERMINATED)
-			pthread_cond_wait(&th->cond, &th->mutex);
-		pthread_mutex_unlock(&th->mutex);
-		return;
-	}
-
-	if (th->state == BA_TRANSPORT_THREAD_STATE_TERMINATED) {
-		pthread_mutex_unlock(&th->mutex);
-		return;
-	}
-
-	/* The transport thread has to be marked for stopping. If at this point
-	 * the state is not STOPPING, it is a programming error. */
-	g_assert_cmpint(th->state, ==, BA_TRANSPORT_THREAD_STATE_STOPPING);
-
-	int err;
-	pthread_t id = th->id;
-	if ((err = pthread_cancel(id)) != 0 && err != ESRCH)
-		warn("Couldn't cancel transport thread: %s", strerror(err));
-
-	/* Set the state to JOINING before unlocking the mutex. This will
-	 * prevent calling the pthread_cancel() function once again. */
-	th->state = BA_TRANSPORT_THREAD_STATE_JOINING;
-
-	pthread_mutex_unlock(&th->mutex);
-
-	if ((err = pthread_join(id, NULL)) != 0)
-		warn("Couldn't join transport thread: %s", strerror(err));
-
-	pthread_mutex_lock(&th->mutex);
-	th->state = BA_TRANSPORT_THREAD_STATE_TERMINATED;
-	pthread_mutex_unlock(&th->mutex);
-
-	/* Notify others that the thread has been terminated. */
-	pthread_cond_broadcast(&th->cond);
-
-}
-
-/**
- * Release transport thread resources. */
-static void transport_thread_free(
-		struct ba_transport_thread *th) {
-	if (th->bt_fd != -1)
-		close(th->bt_fd);
-	if (th->pipe[0] != -1)
-		close(th->pipe[0]);
-	if (th->pipe[1] != -1)
-		close(th->pipe[1]);
-	pthread_mutex_destroy(&th->mutex);
-	pthread_cond_destroy(&th->cond);
-}
-
-/**
- * Set transport thread state.
- *
- * It is only allowed to set the new state according to the state machine.
- * For details, see comments in this function body.
- *
- * @param th Transport thread.
- * @param state New transport thread state.
- * @return If state transition was successful, 0 is returned. Otherwise, -1 is
- *   returned and errno is set to EINVAL. */
-int ba_transport_thread_state_set(
-		struct ba_transport_thread *th,
-		enum ba_transport_thread_state state) {
-
-	pthread_mutex_lock(&th->mutex);
-
-	enum ba_transport_thread_state old_state = th->state;
-
-	/* Moving to the next state is always allowed. */
-	bool valid = state == th->state + 1;
-
-	/* Allow wrapping around the state machine. */
-	if (state == BA_TRANSPORT_THREAD_STATE_IDLE &&
-			old_state == BA_TRANSPORT_THREAD_STATE_TERMINATED)
-		valid = true;
-
-	/* Thread initialization failure: STARTING -> STOPPING */
-	if (state == BA_TRANSPORT_THREAD_STATE_STOPPING &&
-			old_state == BA_TRANSPORT_THREAD_STATE_STARTING)
-		valid = true;
-
-	/* Additionally, it is allowed to move to the TERMINATED state from
-	 * IDLE and STARTING. This transition indicates that the thread has
-	 * never been started or there was an error during the startup. */
-	if (state == BA_TRANSPORT_THREAD_STATE_TERMINATED && (
-				old_state == BA_TRANSPORT_THREAD_STATE_IDLE ||
-				old_state == BA_TRANSPORT_THREAD_STATE_STARTING))
-		valid = true;
-
-	if (valid)
-		th->state = state;
-
-	pthread_mutex_unlock(&th->mutex);
-
-	if (!valid)
-		return errno = EINVAL, -1;
-
-	if (state != old_state && (
-				state == BA_TRANSPORT_THREAD_STATE_RUNNING ||
-				old_state == BA_TRANSPORT_THREAD_STATE_RUNNING)) {
-			bluealsa_dbus_pcm_update(th->pcm, BA_DBUS_PCM_UPDATE_RUNNING);
-	}
-
-	pthread_cond_broadcast(&th->cond);
-	return 0;
-}
-
-/**
- * Check if transport thread is in given state. */
-bool ba_transport_thread_state_check(
-		const struct ba_transport_thread *th,
-		enum ba_transport_thread_state state) {
-	pthread_mutex_lock(MUTABLE(&th->mutex));
-	bool ok = th->state == state;
-	pthread_mutex_unlock(MUTABLE(&th->mutex));
-	return ok;
-}
-
-/**
- * Wait until transport thread reaches given state. */
-int ba_transport_thread_state_wait(
-		const struct ba_transport_thread *th,
-		enum ba_transport_thread_state state) {
-
-	enum ba_transport_thread_state tmp;
-
-	pthread_mutex_lock(MUTABLE(&th->mutex));
-	while ((tmp = th->state) < state)
-		pthread_cond_wait(MUTABLE(&th->cond), MUTABLE(&th->mutex));
-	pthread_mutex_unlock(MUTABLE(&th->mutex));
-
-	if (tmp == state)
-		return 0;
-
-	errno = EIO;
-	return -1;
-}
-
-int ba_transport_thread_bt_acquire(
-		struct ba_transport_thread *th) {
-
-	struct ba_transport *t = th->t;
-	int ret = -1;
-
-	if (th->bt_fd != -1)
-		return 0;
-
-	pthread_mutex_lock(&t->bt_fd_mtx);
-
-	const int bt_fd = t->bt_fd;
-
-	/* check if BT socket file descriptor is valid */
-	if (bt_fd == -1) {
-		error("Invalid BT socket: %d", bt_fd);
-		goto fail;
-	}
-
-	/* check for invalid (i.e. not set) MTU values */
-	if (t->mtu_read == 0 || t->mtu_write == 0) {
-		error("Invalid BT socket MTU [%d]: R:%zu W:%zu", bt_fd,
-				t->mtu_read, t->mtu_write);
-		goto fail;
-	}
-
-	if ((th->bt_fd = dup(bt_fd)) == -1) {
-		error("Couldn't duplicate BT socket [%d]: %s", bt_fd, strerror(errno));
-		goto fail;
-	}
-
-	debug("Created BT socket duplicate: [%d]: %d", bt_fd, th->bt_fd);
-	ret = 0;
-
-fail:
-	pthread_mutex_unlock(&t->bt_fd_mtx);
-	return ret;
-}
-
-int ba_transport_thread_bt_release(
-		struct ba_transport_thread *th) {
-
-	if (th->bt_fd != -1) {
-#if DEBUG
-		pthread_mutex_lock(&th->t->bt_fd_mtx);
-		debug("Closing BT socket duplicate [%d]: %d", th->t->bt_fd, th->bt_fd);
-		pthread_mutex_unlock(&th->t->bt_fd_mtx);
-#endif
-		close(th->bt_fd);
-		th->bt_fd = -1;
-	}
-
-	return 0;
-}
-
-int ba_transport_thread_signal_send(
-		struct ba_transport_thread *th,
-		enum ba_transport_thread_signal signal) {
-
-	int ret = -1;
-
-	pthread_mutex_lock(&th->mutex);
-
-	if (th->state != BA_TRANSPORT_THREAD_STATE_RUNNING) {
-		errno = ESRCH;
-		goto fail;
-	}
-
-	if (write(th->pipe[1], &signal, sizeof(signal)) != sizeof(signal)) {
-		warn("Couldn't write transport thread signal: %s", strerror(errno));
-		goto fail;
-	}
-
-	ret = 0;
-
-fail:
-	pthread_mutex_unlock(&th->mutex);
-	return ret;
-}
-
-int ba_transport_thread_signal_recv(
-		struct ba_transport_thread *th,
-		enum ba_transport_thread_signal *signal) {
-
-	ssize_t ret;
-	while ((ret = read(th->pipe[0], signal, sizeof(*signal))) == -1 &&
-			errno == EINTR)
-		continue;
-
-	if (ret == sizeof(*signal))
-		return 0;
-
-	warn("Couldn't read transport thread signal: %s", strerror(errno));
-	*signal = BA_TRANSPORT_THREAD_SIGNAL_PING;
-	return -1;
-}
-
 static void transport_threads_cancel(struct ba_transport *t) {
 
-	transport_thread_cancel(&t->thread_enc);
-	transport_thread_cancel(&t->thread_dec);
+	if (t->profile & BA_TRANSPORT_PROFILE_MASK_A2DP) {
+		ba_transport_pcm_stop(&t->a2dp.pcm);
+		ba_transport_pcm_stop(&t->a2dp.pcm_bc);
+	}
+	else if (t->profile & BA_TRANSPORT_PROFILE_MASK_SCO) {
+		ba_transport_pcm_stop(&t->sco.pcm_spk);
+		ba_transport_pcm_stop(&t->sco.pcm_mic);
+	}
 
 	pthread_mutex_lock(&t->bt_fd_mtx);
 	t->stopping = false;
@@ -420,8 +145,14 @@ static void transport_threads_cancel_if_no_clients(struct ba_transport *t) {
 
 	if (stop) {
 		debug("Stopping transport: %s", "No PCM clients");
-		ba_transport_thread_state_set_stopping(&t->thread_enc);
-		ba_transport_thread_state_set_stopping(&t->thread_dec);
+		if (t->profile & BA_TRANSPORT_PROFILE_MASK_A2DP) {
+			ba_transport_pcm_state_set_stopping(&t->a2dp.pcm);
+			ba_transport_pcm_state_set_stopping(&t->a2dp.pcm_bc);
+		}
+		else if (t->profile & BA_TRANSPORT_PROFILE_MASK_SCO) {
+			ba_transport_pcm_state_set_stopping(&t->sco.pcm_spk);
+			ba_transport_pcm_state_set_stopping(&t->sco.pcm_mic);
+		}
 	}
 
 	ba_transport_pcms_full_unlock(t);
@@ -526,19 +257,8 @@ static struct ba_transport *transport_new(
 	t->thread_manager_pipe[0] = -1;
 	t->thread_manager_pipe[1] = -1;
 
-	err = 0;
-	err |= transport_thread_init(&t->thread_enc, t);
-	err |= transport_thread_init(&t->thread_dec, t);
-	if (err != 0)
-		goto fail;
-
 	if (pipe(t->thread_manager_pipe) == -1)
 		goto fail;
-	if ((errno = pthread_create(&t->thread_manager_thread_id,
-			NULL, PTHREAD_FUNC(transport_thread_manager), t)) != 0) {
-		t->thread_manager_thread_id = config.main_thread;
-		goto fail;
-	}
 
 	if ((t->bluez_dbus_owner = strdup(dbus_owner)) == NULL)
 		goto fail;
@@ -682,6 +402,7 @@ struct ba_transport *ba_transport_new_a2dp(
 
 	const bool is_sink = profile & BA_TRANSPORT_PROFILE_A2DP_SINK;
 	struct ba_transport *t;
+	int err = 0;
 
 	if ((t = transport_new(device, dbus_owner, dbus_path)) == NULL)
 		return NULL;
@@ -692,15 +413,24 @@ struct ba_transport *ba_transport_new_a2dp(
 	memcpy(&t->a2dp.configuration, configuration, codec->capabilities_size);
 	t->a2dp.state = BLUEZ_A2DP_TRANSPORT_STATE_IDLE;
 
-	transport_pcm_init(&t->a2dp.pcm,
+	err |= transport_pcm_init(&t->a2dp.pcm,
 			is_sink ? BA_TRANSPORT_PCM_MODE_SOURCE : BA_TRANSPORT_PCM_MODE_SINK,
-			is_sink ? &t->thread_dec : &t->thread_enc);
+			t, true);
 	t->a2dp.pcm.soft_volume = !config.a2dp.volume;
 
-	transport_pcm_init(&t->a2dp.pcm_bc,
+	err |= transport_pcm_init(&t->a2dp.pcm_bc,
 			is_sink ?  BA_TRANSPORT_PCM_MODE_SINK : BA_TRANSPORT_PCM_MODE_SOURCE,
-			is_sink ? &t->thread_enc : &t->thread_dec);
+			t, false);
 	t->a2dp.pcm_bc.soft_volume = !config.a2dp.volume;
+
+	if (err != 0)
+		goto fail;
+
+	if ((errno = pthread_create(&t->thread_manager_thread_id,
+			NULL, PTHREAD_FUNC(transport_thread_manager), t)) != 0) {
+		t->thread_manager_thread_id = config.main_thread;
+		goto fail;
+	}
 
 	t->acquire = transport_acquire_bt_a2dp;
 	t->release = transport_release_bt_a2dp;
@@ -716,6 +446,12 @@ struct ba_transport *ba_transport_new_a2dp(
 		bluealsa_dbus_pcm_register(&t->a2dp.pcm_bc);
 
 	return t;
+
+fail:
+	err = errno;
+	ba_transport_unref(t);
+	errno = err;
+	return NULL;
 }
 
 static int transport_acquire_bt_sco(struct ba_transport *t) {
@@ -785,7 +521,7 @@ struct ba_transport *ba_transport_new_sco(
 	const bool is_ag = profile & BA_TRANSPORT_PROFILE_MASK_AG;
 	uint16_t codec_id = HFP_CODEC_UNDEFINED;
 	struct ba_transport *t;
-	int err;
+	int err = 0;
 
 	/* BlueALSA can only support one SCO transport per device, so we arbitrarily
 	 * accept only the first profile connection, with no preference for HFP.
@@ -807,13 +543,22 @@ struct ba_transport *ba_transport_new_sco(
 
 	t->profile = profile;
 
-	transport_pcm_init(&t->sco.pcm_spk,
+	err |= transport_pcm_init(&t->sco.pcm_spk,
 			is_ag ? BA_TRANSPORT_PCM_MODE_SINK : BA_TRANSPORT_PCM_MODE_SOURCE,
-			is_ag ? &t->thread_enc : &t->thread_dec);
+			t, true);
 
-	transport_pcm_init(&t->sco.pcm_mic,
+	err |= transport_pcm_init(&t->sco.pcm_mic,
 			is_ag ? BA_TRANSPORT_PCM_MODE_SOURCE : BA_TRANSPORT_PCM_MODE_SINK,
-			is_ag ? &t->thread_dec : &t->thread_enc);
+			t, false);
+
+	if (err != 0)
+		goto fail;
+
+	if ((errno = pthread_create(&t->thread_manager_thread_id,
+			NULL, PTHREAD_FUNC(transport_thread_manager), t)) != 0) {
+		t->thread_manager_thread_id = config.main_thread;
+		goto fail;
+	}
 
 	t->acquire = transport_acquire_bt_sco;
 	t->release = transport_release_bt_sco;
@@ -1062,6 +807,29 @@ void ba_transport_unref(struct ba_transport *t) {
 
 	ba_device_unref(d);
 
+#if DEBUG
+	/* If IO threads are not terminated yet, we can not go any further.
+	 * Such situation may occur when the transport is about to be freed from one
+	 * of the transport IO threads. The transport thread cleanup function sends
+	 * a command to the manager to terminate all other threads. In such case, we
+	 * will stuck here, because we are about to wait for the transport thread
+	 * manager to terminate. But the manager will not terminate, because it is
+	 * waiting for a transport thread to terminate - which is us... */
+	if (t->profile & BA_TRANSPORT_PROFILE_MASK_A2DP) {
+		g_assert_cmpint(ba_transport_pcm_state_check_terminated(&t->a2dp.pcm), ==, true);
+		g_assert_cmpint(ba_transport_pcm_state_check_terminated(&t->a2dp.pcm_bc), ==, true);
+	}
+	else if (t->profile & BA_TRANSPORT_PROFILE_MASK_SCO) {
+		g_assert_cmpint(ba_transport_pcm_state_check_terminated(&t->sco.pcm_spk), ==, true);
+		g_assert_cmpint(ba_transport_pcm_state_check_terminated(&t->sco.pcm_mic), ==, true);
+	}
+#endif
+
+	if (!pthread_equal(t->thread_manager_thread_id, config.main_thread)) {
+		transport_thread_manager_send_command(t, BA_TRANSPORT_THREAD_MANAGER_TERMINATE);
+		pthread_join(t->thread_manager_thread_id, NULL);
+	}
+
 	if (t->profile & BA_TRANSPORT_PROFILE_MASK_A2DP) {
 		transport_pcm_free(&t->a2dp.pcm);
 		transport_pcm_free(&t->a2dp.pcm_bc);
@@ -1076,30 +844,6 @@ void ba_transport_unref(struct ba_transport *t) {
 		free(t->sco.ofono_dbus_path_modem);
 #endif
 	}
-
-#if DEBUG
-	/* If IO threads are not terminated yet, we can not go any further.
-	 * Such situation may occur when the transport is about to be freed from one
-	 * of the transport IO threads. The transport thread cleanup function sends
-	 * a command to the manager to terminate all other threads. In such case, we
-	 * will stuck here, because we are about to wait for the transport thread
-	 * manager to terminate. But the manager will not terminate, because it is
-	 * waiting for a transport thread to terminate - which is us... */
-	pthread_mutex_lock(&t->thread_enc.mutex);
-	g_assert_cmpint(t->thread_enc.state, ==, BA_TRANSPORT_THREAD_STATE_TERMINATED);
-	pthread_mutex_unlock(&t->thread_enc.mutex);
-	pthread_mutex_lock(&t->thread_dec.mutex);
-	g_assert_cmpint(t->thread_dec.state, ==, BA_TRANSPORT_THREAD_STATE_TERMINATED);
-	pthread_mutex_unlock(&t->thread_dec.mutex);
-#endif
-
-	if (!pthread_equal(t->thread_manager_thread_id, config.main_thread)) {
-		transport_thread_manager_send_command(t, BA_TRANSPORT_THREAD_MANAGER_TERMINATE);
-		pthread_join(t->thread_manager_thread_id, NULL);
-	}
-
-	transport_thread_free(&t->thread_enc);
-	transport_thread_free(&t->thread_dec);
 
 	if (t->thread_manager_pipe[0] != -1)
 		close(t->thread_manager_pipe[0]);
@@ -1277,8 +1021,15 @@ int ba_transport_start(struct ba_transport *t) {
 	if (t->profile == BA_TRANSPORT_PROFILE_A2DP_SOURCE)
 		pthread_mutex_lock(&t->acquisition_mtx);
 
-	bool is_enc_idle = ba_transport_thread_state_check_idle(&t->thread_enc);
-	bool is_dec_idle = ba_transport_thread_state_check_idle(&t->thread_dec);
+	bool is_enc_idle = false, is_dec_idle = false;
+	if (t->profile & BA_TRANSPORT_PROFILE_MASK_A2DP) {
+		is_enc_idle = ba_transport_pcm_state_check_idle(&t->a2dp.pcm);
+		is_dec_idle = ba_transport_pcm_state_check_idle(&t->a2dp.pcm_bc);
+	}
+	else if (t->profile & BA_TRANSPORT_PROFILE_MASK_SCO) {
+		is_enc_idle = ba_transport_pcm_state_check_idle(&t->sco.pcm_spk);
+		is_dec_idle = ba_transport_pcm_state_check_idle(&t->sco.pcm_mic);
+	}
 
 	if (t->profile == BA_TRANSPORT_PROFILE_A2DP_SOURCE)
 		pthread_mutex_unlock(&t->acquisition_mtx);
@@ -1305,9 +1056,16 @@ int ba_transport_start(struct ba_transport *t) {
  * to call it from IO thread itself - it will cause deadlock! */
 int ba_transport_stop(struct ba_transport *t) {
 
-	if (ba_transport_thread_state_check_terminated(&t->thread_enc) &&
-			ba_transport_thread_state_check_terminated(&t->thread_dec))
-		return 0;
+	if (t->profile & BA_TRANSPORT_PROFILE_MASK_A2DP) {
+		if (ba_transport_pcm_state_check_terminated(&t->a2dp.pcm) &&
+				ba_transport_pcm_state_check_terminated(&t->a2dp.pcm_bc))
+			return 0;
+	}
+	else if (t->profile & BA_TRANSPORT_PROFILE_MASK_SCO) {
+		if (ba_transport_pcm_state_check_terminated(&t->sco.pcm_spk) &&
+				ba_transport_pcm_state_check_terminated(&t->sco.pcm_mic))
+			return 0;
+	}
 
 	pthread_mutex_lock(&t->bt_fd_mtx);
 
@@ -1339,14 +1097,20 @@ int ba_transport_stop_async(struct ba_transport *t) {
 	t->stopping = true;
 
 	/* Unlock the mutex before updating thread states. This is necessary to avoid
-	 * lock order inversion with the code in the ba_transport_thread_bt_acquire()
+	 * lock order inversion with the code in the ba_transport_pcm_bt_acquire()
 	 * function. It is safe to do so, because we have already set the stopping
 	 * flag, so the transport_threads_cancel() function will not be called before
 	 * we acquire the lock again. */
 	pthread_mutex_unlock(&t->bt_fd_mtx);
 
-	ba_transport_thread_state_set_stopping(&t->thread_enc);
-	ba_transport_thread_state_set_stopping(&t->thread_dec);
+	if (t->profile & BA_TRANSPORT_PROFILE_MASK_A2DP) {
+		ba_transport_pcm_state_set_stopping(&t->a2dp.pcm);
+		ba_transport_pcm_state_set_stopping(&t->a2dp.pcm_bc);
+	}
+	else if (t->profile & BA_TRANSPORT_PROFILE_MASK_SCO) {
+		ba_transport_pcm_state_set_stopping(&t->sco.pcm_spk);
+		ba_transport_pcm_state_set_stopping(&t->sco.pcm_mic);
+	}
 
 	pthread_mutex_lock(&t->bt_fd_mtx);
 
@@ -1397,8 +1161,14 @@ final:
 
 	if (acquired) {
 
-		ba_transport_thread_state_set_idle(&t->thread_enc);
-		ba_transport_thread_state_set_idle(&t->thread_dec);
+		if (t->profile & BA_TRANSPORT_PROFILE_MASK_A2DP) {
+			ba_transport_pcm_state_set_idle(&t->a2dp.pcm);
+			ba_transport_pcm_state_set_idle(&t->a2dp.pcm_bc);
+		}
+		else if (t->profile & BA_TRANSPORT_PROFILE_MASK_SCO) {
+			ba_transport_pcm_state_set_idle(&t->sco.pcm_spk);
+			ba_transport_pcm_state_set_idle(&t->sco.pcm_mic);
+		}
 
 		/* For SCO profiles we can start transport IO threads right away. There
 		 * is no asynchronous signaling from BlueZ like with A2DP profiles. */

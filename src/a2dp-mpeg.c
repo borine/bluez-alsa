@@ -194,7 +194,6 @@ void *a2dp_mp3_enc_thread(struct ba_transport_pcm *t_pcm) {
 	pthread_cleanup_push(PTHREAD_CLEANUP(ba_transport_pcm_thread_cleanup), t_pcm);
 
 	struct ba_transport *t = t_pcm->t;
-	struct ba_transport_thread *th = t_pcm->th;
 	struct io_poll io = { .timeout = -1 };
 
 	lame_t handle;
@@ -306,7 +305,7 @@ void *a2dp_mp3_enc_thread(struct ba_transport_pcm *t_pcm) {
 	rtp_state_init(&rtp, samplerate, 90000);
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
-	for (ba_transport_thread_state_set_running(th);;) {
+	for (ba_transport_pcm_state_set_running(t_pcm);;) {
 
 		ssize_t samples = ffb_len_in(&pcm);
 		switch (samples = io_poll_and_read_pcm(&io, t_pcm, pcm.tail, samples)) {
@@ -357,7 +356,7 @@ void *a2dp_mp3_enc_thread(struct ba_transport_pcm *t_pcm) {
 				ffb_seek(&bt, RTP_HEADER_LEN + sizeof(*rtp_mpeg_audio_header) + chunk_len);
 
 				len = ffb_blen_out(&bt);
-				if ((len = io_bt_write(th, bt.data, len)) <= 0) {
+				if ((len = io_bt_write(t_pcm, bt.data, len)) <= 0) {
 					if (len == -1)
 						error("BT write error: %s", strerror(errno));
 					goto fail;
@@ -415,7 +414,6 @@ void *a2dp_mpeg_dec_thread(struct ba_transport_pcm *t_pcm) {
 	pthread_cleanup_push(PTHREAD_CLEANUP(ba_transport_pcm_thread_cleanup), t_pcm);
 
 	struct ba_transport *t = t_pcm->t;
-	struct ba_transport_thread *th = t_pcm->th;
 	struct io_poll io = { .timeout = -1 };
 
 #if ENABLE_MPG123
@@ -490,10 +488,10 @@ void *a2dp_mpeg_dec_thread(struct ba_transport_pcm *t_pcm) {
 	rtp_state_init(&rtp, samplerate, 90000);
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
-	for (ba_transport_thread_state_set_running(th);;) {
+	for (ba_transport_pcm_state_set_running(t_pcm);;) {
 
 		ssize_t len = ffb_blen_in(&bt);
-		if ((len = io_poll_and_read_bt(&io, th, bt.data, len)) <= 0) {
+		if ((len = io_poll_and_read_bt(&io, t_pcm, bt.data, len)) <= 0) {
 			if (len == -1)
 				error("BT poll and read error: %s", strerror(errno));
 			goto fail;
@@ -607,16 +605,16 @@ int a2dp_mpeg_transport_start(struct ba_transport *t) {
 	if (t->profile & BA_TRANSPORT_PROFILE_A2DP_SOURCE) {
 #if ENABLE_MP3LAME
 		if (t->a2dp.configuration.mpeg.layer == MPEG_LAYER_MP3)
-			return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_mp3_enc_thread, "ba-a2dp-mp3", true);
+			return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_mp3_enc_thread, "ba-a2dp-mp3");
 #endif
 	}
 
 	if (t->profile & BA_TRANSPORT_PROFILE_A2DP_SINK) {
 #if ENABLE_MPG123
-		return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_mpeg_dec_thread, "ba-a2dp-mpeg", true);
+		return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_mpeg_dec_thread, "ba-a2dp-mpeg");
 #elif ENABLE_MP3LAME
 		if (t->a2dp.configuration.mpeg.layer == MPEG_LAYER_MP3)
-			return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_mpeg_dec_thread, "ba-a2dp-mp3", true);
+			return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_mpeg_dec_thread, "ba-a2dp-mp3");
 #endif
 	}
 

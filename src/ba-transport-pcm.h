@@ -29,6 +29,15 @@ enum ba_transport_pcm_mode {
 	BA_TRANSPORT_PCM_MODE_SINK,
 };
 
+enum ba_transport_pcm_state {
+	BA_TRANSPORT_PCM_STATE_IDLE,
+	BA_TRANSPORT_PCM_STATE_STARTING,
+	BA_TRANSPORT_PCM_STATE_RUNNING,
+	BA_TRANSPORT_PCM_STATE_STOPPING,
+	BA_TRANSPORT_PCM_STATE_JOINING,
+	BA_TRANSPORT_PCM_STATE_TERMINATED,
+};
+
 /**
  * Builder for 16-bit PCM stream format identifier. */
 #define BA_TRANSPORT_PCM_FORMAT(sign, width, bytes, endian) \
@@ -56,28 +65,43 @@ struct ba_transport_pcm_volume {
 	double scale;
 };
 
-struct ba_transport_thread;
+enum ba_transport_pcm_signal {
+	BA_TRANSPORT_PCM_SIGNAL_OPEN,
+	BA_TRANSPORT_PCM_SIGNAL_CLOSE,
+	BA_TRANSPORT_PCM_SIGNAL_PAUSE,
+	BA_TRANSPORT_PCM_SIGNAL_RESUME,
+	BA_TRANSPORT_PCM_SIGNAL_SYNC,
+	BA_TRANSPORT_PCM_SIGNAL_DROP,
+};
+
+struct ba_transport;
 
 struct ba_transport_pcm {
 
 	/* backward reference to transport */
 	struct ba_transport *t;
-	/* associated transport thread */
-	struct ba_transport_thread *th;
 
 	/* PCM stream operation mode */
 	enum ba_transport_pcm_mode mode;
+	/* indicates a master PCM */
+	bool master;
 
 	/* guard PCM data updates */
 	pthread_mutex_t mutex;
 	/* updates notification */
 	pthread_cond_t cond;
 
+	pthread_mutex_t state_mtx;
+	/* current state of the PCM */
+	enum ba_transport_pcm_state state;
+
 	/* FIFO file descriptor */
 	int fd;
+	/* clone of BT socket */
+	int fd_bt;
 
-	/* indicates whether PCM shall be active */
-	bool active;
+	/* indicates whether PCM is running */
+	bool paused;
 
 	/* 16-bit stream format identifier */
 	uint16_t format;
@@ -109,6 +133,12 @@ struct ba_transport_pcm {
 	/* new PCM client mutex */
 	pthread_mutex_t client_mtx;
 
+	/* actual thread ID */
+	pthread_t tid;
+
+	/* notification PIPE */
+	int pipe[2];
+
 	/* exported PCM D-Bus API */
 	char *ba_dbus_path;
 	bool ba_dbus_exported;
@@ -118,9 +148,41 @@ struct ba_transport_pcm {
 int transport_pcm_init(
 		struct ba_transport_pcm *pcm,
 		enum ba_transport_pcm_mode mode,
-		struct ba_transport_thread *th);
+		struct ba_transport *t,
+		bool master);
 void transport_pcm_free(
 		struct ba_transport_pcm *pcm);
+
+int ba_transport_pcm_state_set(
+		struct ba_transport_pcm *pcm,
+		enum ba_transport_pcm_state state);
+
+#define ba_transport_pcm_state_set_idle(pcm) \
+	ba_transport_pcm_state_set(pcm, BA_TRANSPORT_PCM_STATE_IDLE)
+#define ba_transport_pcm_state_set_running(pcm) \
+	ba_transport_pcm_state_set(pcm, BA_TRANSPORT_PCM_STATE_RUNNING)
+#define ba_transport_pcm_state_set_stopping(pcm) \
+	ba_transport_pcm_state_set(pcm, BA_TRANSPORT_PCM_STATE_STOPPING)
+
+bool ba_transport_pcm_state_check(
+		const struct ba_transport_pcm *pcm,
+		enum ba_transport_pcm_state state);
+
+#define ba_transport_pcm_state_check_idle(pcm) \
+	ba_transport_pcm_state_check(pcm, BA_TRANSPORT_PCM_STATE_IDLE)
+#define ba_transport_pcm_state_check_running(pcm) \
+	ba_transport_pcm_state_check(pcm, BA_TRANSPORT_PCM_STATE_RUNNING)
+#define ba_transport_pcm_state_check_terminated(pcm) \
+	ba_transport_pcm_state_check(pcm, BA_TRANSPORT_PCM_STATE_TERMINATED)
+
+int ba_transport_pcm_state_wait(
+		const struct ba_transport_pcm *pcm,
+		enum ba_transport_pcm_state state);
+
+#define ba_transport_pcm_state_wait_running(pcm) \
+	ba_transport_pcm_state_wait(pcm, BA_TRANSPORT_PCM_STATE_RUNNING)
+#define ba_transport_pcm_state_wait_terminated(pcm) \
+	ba_transport_pcm_state_wait(pcm, BA_TRANSPORT_PCM_STATE_TERMINATED)
 
 /**
  * Transport PCM encoder/decoder IO thread function. */
@@ -134,11 +196,15 @@ void ba_transport_pcm_thread_cleanup(struct ba_transport_pcm *pcm);
 struct ba_transport_pcm *ba_transport_pcm_ref(struct ba_transport_pcm *pcm);
 void ba_transport_pcm_unref(struct ba_transport_pcm *pcm);
 
+int ba_transport_pcm_bt_acquire(struct ba_transport_pcm *pcm);
+int ba_transport_pcm_bt_release(struct ba_transport_pcm *pcm);
+
 int ba_transport_pcm_start(
 		struct ba_transport_pcm *pcm,
 		ba_transport_pcm_thread_func th_func,
-		const char *name,
-		bool master);
+		const char *name);
+void ba_transport_pcm_stop(
+		struct ba_transport_pcm *pcm);
 
 int ba_transport_pcm_release(struct ba_transport_pcm *pcm);
 
@@ -146,6 +212,12 @@ int ba_transport_pcm_pause(struct ba_transport_pcm *pcm);
 int ba_transport_pcm_resume(struct ba_transport_pcm *pcm);
 int ba_transport_pcm_drain(struct ba_transport_pcm *pcm);
 int ba_transport_pcm_drop(struct ba_transport_pcm *pcm);
+
+int ba_transport_pcm_signal_send(
+		struct ba_transport_pcm *pcm,
+		enum ba_transport_pcm_signal signal);
+enum ba_transport_pcm_signal ba_transport_pcm_signal_recv(
+		struct ba_transport_pcm *pcm);
 
 bool ba_transport_pcm_is_active(const struct ba_transport_pcm *pcm);
 

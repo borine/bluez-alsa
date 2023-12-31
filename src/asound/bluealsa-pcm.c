@@ -36,6 +36,7 @@
 #include <dbus/dbus.h>
 
 #include "shared/dbus-client.h"
+#include "shared/dbus-client-pcm.h"
 #include "shared/defs.h"
 #include "shared/hex.h"
 #include "shared/log.h"
@@ -528,9 +529,9 @@ static int bluealsa_start(snd_pcm_ioplug_t *io) {
 	if (io->stream == SND_PCM_STREAM_CAPTURE)
 		splice(pcm->ba_pcm_fd, NULL, pcm->null_fd, NULL, 1024 * 32, SPLICE_F_NONBLOCK);
 
-	if (!bluealsa_dbus_pcm_ctrl_send_resume(pcm->ba_pcm_ctrl_fd, NULL)) {
+	if (!ba_dbus_pcm_ctrl_send_resume(pcm->ba_pcm_ctrl_fd, NULL)) {
 		debug2("Couldn't start PCM: %s", strerror(errno));
-		return -errno;
+		return -EIO;
 	}
 
 	/* If the IO thread is already started, skip thread creation. Otherwise,
@@ -556,7 +557,7 @@ static int bluealsa_start(snd_pcm_ioplug_t *io) {
 		pthread_mutex_unlock(&pcm->mutex);
 		debug2("Couldn't create IO thread: %s", strerror(errno));
 		pcm->io_started = false;
-		return -errno;
+		return -EIO;
 	}
 
 	pthread_setname_np(pcm->io_thread, "pcm-io");
@@ -583,8 +584,8 @@ static int bluealsa_stop(snd_pcm_ioplug_t *io) {
 	 * was stopped. */
 	pcm->io_hw_ptr = 0;
 
-	if (!bluealsa_dbus_pcm_ctrl_send_drop(pcm->ba_pcm_ctrl_fd, NULL))
-		return -errno;
+	if (!ba_dbus_pcm_ctrl_send_drop(pcm->ba_pcm_ctrl_fd, NULL))
+		return -EIO;
 
 	/* Applications that call poll() after snd_pcm_drain() will be blocked
 	 * forever unless we generate a poll() event here. */
@@ -629,7 +630,7 @@ static snd_pcm_sframes_t bluealsa_pointer(snd_pcm_ioplug_t *io) {
 static int bluealsa_close(snd_pcm_ioplug_t *io) {
 	struct bluealsa_pcm *pcm = io->private_data;
 	debug2("Closing");
-	bluealsa_dbus_connection_ctx_free(&pcm->dbus_ctx);
+	ba_dbus_connection_ctx_free(&pcm->dbus_ctx);
 	close(pcm->event_fd);
 	pthread_mutex_destroy(&pcm->mutex);
 	pthread_cond_destroy(&pcm->pause_cond);
@@ -738,7 +739,7 @@ static int bluealsa_hw_params(snd_pcm_ioplug_t *io, snd_pcm_hw_params_t *params)
 	pcm->frame_size = (snd_pcm_format_physical_width(io->format) * io->channels) / 8;
 
 	DBusError err = DBUS_ERROR_INIT;
-	if (!bluealsa_dbus_pcm_open(&pcm->dbus_ctx, pcm->ba_pcm.pcm_path,
+	if (!ba_dbus_pcm_open(&pcm->dbus_ctx, pcm->ba_pcm.pcm_path,
 				&pcm->ba_pcm_fd, &pcm->ba_pcm_ctrl_fd, &err)) {
 		debug2("Couldn't open PCM: %s", err.message);
 		dbus_error_free(&err);
@@ -893,7 +894,7 @@ static int bluealsa_drain(snd_pcm_ioplug_t *io) {
 	}
 
 	/* For a non-blocking drain, we do not wait for the drain to complete. */
-	if (io->nonblock == 1)
+	if (io->nonblock)
 		return -EAGAIN;
 
 	struct pollfd pfd = { pcm->event_fd, POLLIN, 0 };
@@ -956,7 +957,7 @@ static int bluealsa_drain(snd_pcm_ioplug_t *io) {
 	}
 
 	if (io->state == SND_PCM_STATE_DRAINING && !aborted)
-		if (!bluealsa_dbus_pcm_ctrl_send_drain(pcm->ba_pcm_ctrl_fd, NULL)) {
+		if (!ba_dbus_pcm_ctrl_send_drain(pcm->ba_pcm_ctrl_fd, NULL)) {
 			bluealsa_stop(io);
 			io->state = SND_PCM_STATE_SETUP;
 			ret = -EIO;
@@ -992,7 +993,7 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 	 * dispatching was done more than one second ago - this should prioritize
 	 * asynchronous dispatching in the poll_revents() callback. */
 	if (pcm->dbus_dispatch_ts.tv_sec + 1 < now.tv_sec) {
-		bluealsa_dbus_connection_dispatch(&pcm->dbus_ctx);
+		ba_dbus_connection_dispatch(&pcm->dbus_ctx);
 		gettimestamp(&pcm->dbus_dispatch_ts);
 	}
 
@@ -1088,8 +1089,8 @@ static int bluealsa_pause(snd_pcm_ioplug_t *io, int enable) {
 	}
 
 	if (enable == 1) {
-		if (!bluealsa_dbus_pcm_ctrl_send_pause(pcm->ba_pcm_ctrl_fd, NULL))
-			return -errno;
+		if (!ba_dbus_pcm_ctrl_send_pause(pcm->ba_pcm_ctrl_fd, NULL))
+			return -EIO;
 
 		if (io->stream == SND_PCM_STREAM_CAPTURE)
 			pcm->delay_running = false;
@@ -1106,8 +1107,9 @@ static int bluealsa_pause(snd_pcm_ioplug_t *io, int enable) {
 		/* for capture only we must clear stale audio frames from the fifo. */
 		if (io->stream == SND_PCM_STREAM_CAPTURE)
 			splice(pcm->ba_pcm_fd, NULL, pcm->null_fd, NULL, 1024 * 32, SPLICE_F_NONBLOCK);
-		if (!bluealsa_dbus_pcm_ctrl_send_resume(pcm->ba_pcm_ctrl_fd, NULL))
-			return -errno;
+
+		if (!ba_dbus_pcm_ctrl_send_resume(pcm->ba_pcm_ctrl_fd, NULL))
+			return -EIO;
 
 		/* for capture only we must reset the delay timestamp. */
 		if (io->stream == SND_PCM_STREAM_CAPTURE) {
@@ -1171,7 +1173,7 @@ static int bluealsa_poll_descriptors_count(snd_pcm_ioplug_t *io) {
 	struct bluealsa_pcm *pcm = io->private_data;
 
 	nfds_t dbus_nfds = 0;
-	bluealsa_dbus_connection_poll_fds(&pcm->dbus_ctx, NULL, &dbus_nfds);
+	ba_dbus_connection_poll_fds(&pcm->dbus_ctx, NULL, &dbus_nfds);
 
 	return 1 + dbus_nfds;
 }
@@ -1184,7 +1186,7 @@ static int bluealsa_poll_descriptors(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 		return -EINVAL;
 
 	nfds_t dbus_nfds = nfds - 1;
-	if (!bluealsa_dbus_connection_poll_fds(&pcm->dbus_ctx, &pfd[1], &dbus_nfds))
+	if (!ba_dbus_connection_poll_fds(&pcm->dbus_ctx, &pfd[1], &dbus_nfds))
 		return -EINVAL;
 
 	/* PCM plug-in relies on our internal event file descriptor. */
@@ -1204,7 +1206,7 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 	if (nfds < 1)
 		return -EINVAL;
 
-	bluealsa_dbus_connection_poll_dispatch(&pcm->dbus_ctx, &pfd[1], nfds - 1);
+	ba_dbus_connection_poll_dispatch(&pcm->dbus_ctx, &pfd[1], nfds - 1);
 	while (dbus_connection_dispatch(pcm->dbus_ctx.conn) == DBUS_DISPATCH_DATA_REMAINS)
 		continue;
 	gettimestamp(&pcm->dbus_dispatch_ts);
@@ -1268,7 +1270,7 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 			case SND_PCM_STATE_XRUN:
 				/* For capture we pause the server until the PCM is restarted. */
 				if (io->stream == SND_PCM_STREAM_CAPTURE)
-					bluealsa_dbus_pcm_ctrl_send_pause(pcm->ba_pcm_ctrl_fd, NULL);
+					ba_dbus_pcm_ctrl_send_pause(pcm->ba_pcm_ctrl_fd, NULL);
 				/* fallthrough */
 			case SND_PCM_STATE_PAUSED:
 			case SND_PCM_STATE_SUSPENDED:
@@ -1408,7 +1410,7 @@ static DBusHandlerResult bluealsa_dbus_msg_filter(DBusConnection *conn,
 	dbus_message_iter_next(&iter);
 
 	if (strcmp(updated_interface, BLUEALSA_INTERFACE_PCM) == 0)
-		bluealsa_dbus_message_iter_get_pcm_props(&iter, NULL, &pcm->ba_pcm);
+		dbus_message_iter_get_ba_pcm_props(&iter, NULL, &pcm->ba_pcm);
 
 	return DBUS_HANDLER_RESULT_HANDLED;
 }
@@ -1494,8 +1496,8 @@ static bool bluealsa_select_pcm_codec(struct bluealsa_pcm *pcm, const char *code
 
 	}
 
-	if (!bluealsa_dbus_pcm_select_codec(&pcm->dbus_ctx, pcm->ba_pcm.pcm_path,
-				bluealsa_dbus_pcm_get_codec_canonical_name(codec_name), config, config_len, err))
+	if (!ba_dbus_pcm_select_codec(&pcm->dbus_ctx, pcm->ba_pcm.pcm_path,
+				ba_dbus_pcm_codec_get_canonical_name(codec_name), config, config_len, err))
 		goto fail;
 
 	ret = true;
@@ -1522,7 +1524,7 @@ static bool bluealsa_update_pcm_volume(struct bluealsa_pcm *pcm,
 	}
 	if (pcm->ba_pcm.volume.raw == old)
 		return true;
-	return bluealsa_dbus_pcm_update(&pcm->dbus_ctx, &pcm->ba_pcm, BLUEALSA_PCM_VOLUME, err);
+	return ba_dbus_pcm_update(&pcm->dbus_ctx, &pcm->ba_pcm, BLUEALSA_PCM_VOLUME, err);
 }
 
 static bool bluealsa_update_pcm_softvol(struct bluealsa_pcm *pcm,
@@ -1530,7 +1532,7 @@ static bool bluealsa_update_pcm_softvol(struct bluealsa_pcm *pcm,
 	if (softvol < 0 || !!softvol == pcm->ba_pcm.soft_volume)
 		return true;
 	pcm->ba_pcm.soft_volume = !!softvol;
-	return bluealsa_dbus_pcm_update(&pcm->dbus_ctx, &pcm->ba_pcm, BLUEALSA_PCM_SOFT_VOLUME, err);
+	return ba_dbus_pcm_update(&pcm->dbus_ctx, &pcm->ba_pcm, BLUEALSA_PCM_SOFT_VOLUME, err);
 }
 
 SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
@@ -1659,7 +1661,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 	dbus_threads_init_default();
 
 	DBusError err = DBUS_ERROR_INIT;
-	if (bluealsa_dbus_connection_ctx_init(&pcm->dbus_ctx, service, &err) != TRUE) {
+	if (ba_dbus_connection_ctx_init(&pcm->dbus_ctx, service, &err) != TRUE) {
 		SNDERR("Couldn't initialize D-Bus context: %s", err.message);
 		ret = -ENOMEM;
 		goto fail;
@@ -1672,7 +1674,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 	}
 
 	debug("Getting BlueALSA PCM: %s %s %s", snd_pcm_stream_name(stream), device, profile);
-	if (!bluealsa_dbus_get_pcm(&pcm->dbus_ctx, &ba_addr, ba_profile,
+	if (!ba_dbus_pcm_get(&pcm->dbus_ctx, &ba_addr, ba_profile,
 				stream == SND_PCM_STREAM_PLAYBACK ? BA_PCM_MODE_SINK : BA_PCM_MODE_SOURCE,
 				&pcm->ba_pcm, &err)) {
 		SNDERR("Couldn't get BlueALSA PCM: %s", err.message);
@@ -1681,7 +1683,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 	}
 
 	/* Subscribe for properties-changed signals but for the opened PCM only. */
-	bluealsa_dbus_connection_signal_match_add(&pcm->dbus_ctx, pcm->dbus_ctx.ba_service,
+	ba_dbus_connection_signal_match_add(&pcm->dbus_ctx, pcm->dbus_ctx.ba_service,
 			pcm->ba_pcm.pcm_path, DBUS_INTERFACE_PROPERTIES, "PropertiesChanged",
 			"arg0='"BLUEALSA_INTERFACE_PCM"'");
 
@@ -1704,7 +1706,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 		if (bluealsa_select_pcm_codec(pcm, codec, &err)) {
 			/* Changing the codec may change the audio format, sampling rate and/or
 			 * channels. We need to refresh our cache of PCM properties. */
-			if (!bluealsa_dbus_get_pcm(&pcm->dbus_ctx, &ba_addr, ba_profile,
+			if (!ba_dbus_pcm_get(&pcm->dbus_ctx, &ba_addr, ba_profile,
 						stream == SND_PCM_STREAM_PLAYBACK ? BA_PCM_MODE_SINK : BA_PCM_MODE_SOURCE,
 						&pcm->ba_pcm, &err)) {
 				SNDERR("Couldn't get BlueALSA PCM: %s", err.message);
@@ -1753,7 +1755,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 	return 0;
 
 fail:
-	bluealsa_dbus_connection_ctx_free(&pcm->dbus_ctx);
+	ba_dbus_connection_ctx_free(&pcm->dbus_ctx);
 	dbus_error_free(&err);
 	if (pcm->event_fd != -1)
 		close(pcm->event_fd);

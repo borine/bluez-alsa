@@ -44,7 +44,6 @@
 #include "shared/a2dp-codecs.h"
 #include "shared/log.h"
 
-#include "../src/ba-transport.c"
 #include "inc/check.inc"
 
 #define TEST_BLUEALSA_STORAGE_DIR "/tmp/bluealsa-test-ba-storage"
@@ -130,13 +129,14 @@ CK_START_TEST(test_ba_transport) {
 	ck_assert_ptr_ne(a = ba_adapter_new(0), NULL);
 	ck_assert_ptr_ne(d = ba_device_new(a, &addr), NULL);
 
-	ck_assert_ptr_ne(t = transport_new(d, "/owner", "/path"), NULL);
+	ck_assert_ptr_ne(t = ba_transport_new_sco(d,
+				BA_TRANSPORT_PROFILE_HFP_AG, "/owner", "/path", -1), NULL);
 
 	ba_adapter_unref(a);
 	ba_device_unref(d);
 
 	ck_assert_ptr_eq(t->d, d);
-	ck_assert_int_eq(t->profile, BA_TRANSPORT_PROFILE_NONE);
+	ck_assert_int_eq(t->profile, BA_TRANSPORT_PROFILE_HFP_AG);
 	ck_assert_str_eq(t->bluez_dbus_owner, "/owner");
 	ck_assert_str_eq(t->bluez_dbus_path, "/path");
 
@@ -238,14 +238,14 @@ CK_START_TEST(test_ba_transport_threads_sync_termination) {
 	t_sco->mtu_read = 48;
 	t_sco->mtu_write = 48;
 
-	ck_assert_int_eq(ba_transport_pcm_start(t_sco->thread_enc.pcm, sco_enc_thread, "enc", true), 0);
-	ck_assert_int_eq(ba_transport_thread_state_wait_running(&t_sco->thread_enc), 0);
+	ck_assert_int_eq(ba_transport_pcm_start(&t_sco->sco.pcm_spk, sco_enc_thread, "enc"), 0);
+	ck_assert_int_eq(ba_transport_pcm_state_wait_running(&t_sco->sco.pcm_spk), 0);
 
-	ck_assert_int_eq(ba_transport_pcm_start(t_sco->thread_dec.pcm, cleanup_thread, "dec", false), 0);
-	ck_assert_int_eq(ba_transport_thread_state_wait_running(&t_sco->thread_dec), -1);
+	ck_assert_int_eq(ba_transport_pcm_start(&t_sco->sco.pcm_mic, cleanup_thread, "dec"), 0);
+	ck_assert_int_eq(ba_transport_pcm_state_wait_running(&t_sco->sco.pcm_mic), -1);
 
-	ck_assert_int_eq(ba_transport_thread_state_wait_terminated(&t_sco->thread_enc), 0);
-	ck_assert_int_eq(ba_transport_thread_state_wait_terminated(&t_sco->thread_dec), 0);
+	ck_assert_int_eq(ba_transport_pcm_state_wait_terminated(&t_sco->sco.pcm_spk), 0);
+	ck_assert_int_eq(ba_transport_pcm_state_wait_terminated(&t_sco->sco.pcm_mic), 0);
 
 	ba_adapter_unref(a);
 	ba_device_unref(d);
@@ -328,7 +328,8 @@ CK_START_TEST(test_cascade_free) {
 
 	ck_assert_ptr_ne(a = ba_adapter_new(0), NULL);
 	ck_assert_ptr_ne(d = ba_device_new(a, &addr), NULL);
-	ck_assert_ptr_ne(t = transport_new(d, "/owner", "/path"), NULL);
+	ck_assert_ptr_ne(t = ba_transport_new_sco(d,
+				BA_TRANSPORT_PROFILE_HFP_AG, "/owner", "/path", -1), NULL);
 
 	t->bt_fd = 0;  /* release() is called for acquired transport only */
 	t->release = test_cascade_free_transport_unref;

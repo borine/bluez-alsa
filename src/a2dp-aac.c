@@ -192,7 +192,6 @@ void *a2dp_aac_enc_thread(struct ba_transport_pcm *t_pcm) {
 	pthread_cleanup_push(PTHREAD_CLEANUP(ba_transport_pcm_thread_cleanup), t_pcm);
 
 	struct ba_transport *t = t_pcm->t;
-	struct ba_transport_thread *th = t_pcm->th;
 	struct io_poll io = { .timeout = -1 };
 
 	HANDLE_AACENCODER handle;
@@ -338,7 +337,7 @@ void *a2dp_aac_enc_thread(struct ba_transport_pcm *t_pcm) {
 	AACENC_OutArgs out_args = { 0 };
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
-	for (ba_transport_thread_state_set_running(th);;) {
+	for (ba_transport_pcm_state_set_running(t_pcm);;) {
 
 		ssize_t samples = ffb_len_in(&pcm);
 		switch (samples = io_poll_and_read_pcm(&io, t_pcm, pcm.tail, samples)) {
@@ -384,7 +383,7 @@ void *a2dp_aac_enc_thread(struct ba_transport_pcm *t_pcm) {
 					ffb_seek(&bt, RTP_HEADER_LEN + chunk_len);
 
 					ssize_t len = ffb_blen_out(&bt);
-					if ((len = io_bt_write(th, bt.data, len)) <= 0) {
+					if ((len = io_bt_write(t_pcm, bt.data, len)) <= 0) {
 						if (len == -1)
 							error("BT write error: %s", strerror(errno));
 						goto fail;
@@ -442,7 +441,6 @@ void *a2dp_aac_dec_thread(struct ba_transport_pcm *t_pcm) {
 	pthread_cleanup_push(PTHREAD_CLEANUP(ba_transport_pcm_thread_cleanup), t_pcm);
 
 	struct ba_transport *t = t_pcm->t;
-	struct ba_transport_thread *th = t_pcm->th;
 	struct io_poll io = { .timeout = -1 };
 
 	HANDLE_AACDECODER handle;
@@ -495,10 +493,10 @@ void *a2dp_aac_dec_thread(struct ba_transport_pcm *t_pcm) {
 	int markbit_quirk = -3;
 
 	debug_transport_pcm_thread_loop(t_pcm, "START");
-	for (ba_transport_thread_state_set_running(th);;) {
+	for (ba_transport_pcm_state_set_running(t_pcm);;) {
 
 		ssize_t len = ffb_blen_in(&bt);
-		if ((len = io_poll_and_read_bt(&io, th, bt.data, len)) <= 0) {
+		if ((len = io_poll_and_read_bt(&io, t_pcm, bt.data, len)) <= 0) {
 			if (len == -1)
 				error("BT poll and read error: %s", strerror(errno));
 			goto fail;
@@ -593,10 +591,10 @@ fail_open:
 int a2dp_aac_transport_start(struct ba_transport *t) {
 
 	if (t->profile & BA_TRANSPORT_PROFILE_A2DP_SOURCE)
-		return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_aac_enc_thread, "ba-a2dp-aac", true);
+		return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_aac_enc_thread, "ba-a2dp-aac");
 
 	if (t->profile & BA_TRANSPORT_PROFILE_A2DP_SINK)
-		return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_aac_dec_thread, "ba-a2dp-aac", true);
+		return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_aac_dec_thread, "ba-a2dp-aac");
 
 	g_assert_not_reached();
 	return -1;
