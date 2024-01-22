@@ -1,6 +1,6 @@
 /*
  * BlueALSA - utils.c
- * Copyright (c) 2016-2023 Arkadiusz Bokowy
+ * Copyright (c) 2016-2024 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -9,7 +9,10 @@
  */
 
 #include "utils.h"
-/* IWYU pragma: no_include "config.h" */
+
+#if HAVE_CONFIG_H
+# include <config.h>
+#endif
 
 #include <ctype.h>
 #include <stdbool.h>
@@ -96,6 +99,25 @@ bool g_variant_validate_value(GVariant *value, const GVariantType *type,
 }
 
 /**
+ * Create a new watch source for the given I/O channel.
+ *
+ * @param channel A pointer to the GIOChannel.
+ * @param priority The priority of the source.
+ * @param cond The condition to watch for.
+ * @param func The function to call when the condition is satisfied.
+ * @param userdata Data to pass to the function.
+ * @param notify Function to call when the source is destroyed.
+ * @return New watch source. */
+GSource *g_io_create_watch_full(GIOChannel *channel, int priority,
+		GIOCondition cond, GIOFunc func, void *userdata, GDestroyNotify notify) {
+	GSource *watch = g_io_create_watch(channel, cond);
+	g_source_set_callback(watch, G_SOURCE_FUNC(func), userdata, notify);
+	g_source_set_priority(watch, priority);
+	g_source_attach(watch, NULL);
+	return watch;
+}
+
+/**
  * Convert a pointer to BT address to a hash value.
  *
  * @param v A pointer to bdaddr_t structure.
@@ -117,10 +139,10 @@ gboolean g_bdaddr_equal(const void *v1, const void *v2) {
 
 #if ENABLE_MP3LAME
 /**
- * Get maximum possible bit-rate for the given bit-rate mask.
+ * Get maximum possible bitrate for the given bitrate mask.
  *
- * @param mask MPEG-1 layer III bit-rate mask.
- * @return Bit-rate in kilobits per second. */
+ * @param mask MPEG-1 layer III bitrate mask.
+ * @return Bitrate in kilobits per second. */
 int a2dp_mpeg1_mp3_get_max_bitrate(uint16_t mask) {
 
 	static int bitrates[] = { 320, 256, 224, 192, 160, 128, 112, 96, 80, 64, 56, 48, 40, 32 };
@@ -171,6 +193,8 @@ const char *aacdec_strerror(AAC_DECODER_ERROR err) {
 		return "Success";
 	case AAC_DEC_OUT_OF_MEMORY:
 		return "Out of memory";
+	case AAC_DEC_UNKNOWN:
+		return "Unknown error";
 	case AAC_DEC_TRANSPORT_SYNC_ERROR:
 		return "Transport sync error";
 	case AAC_DEC_NOT_ENOUGH_BITS:
@@ -197,6 +221,8 @@ const char *aacdec_strerror(AAC_DECODER_ERROR err) {
 		return "Unsupported parameter";
 	case AAC_DEC_NEED_TO_RESTART:
 		return "Restart required";
+	case AAC_DEC_OUTPUT_BUFFER_TOO_SMALL:
+		return "Output buffer too small";
 	case AAC_DEC_TRANSPORT_ERROR:
 		return "Transport error";
 	case AAC_DEC_PARSE_ERROR:
@@ -264,14 +290,15 @@ const char *aacenc_strerror(AACENC_ERROR err) {
 		return "Transport library initialization error";
 	case AACENC_INIT_META_ERROR:
 		return "Metadata library initialization error";
+	case AACENC_INIT_MPS_ERROR:
+		return "MPS library initialization error";
 	case AACENC_ENCODE_ERROR:
 		return "Encoding error";
 	case AACENC_ENCODE_EOF:
 		return "End of file";
-	default:
-		debug("Unknown error code: %#x", err);
-		return "Unknown error";
 	}
+	debug("Unknown error code: %#x", err);
+	return "Unknown error";
 }
 #endif
 
@@ -322,12 +349,13 @@ const char *lc3plus_strerror(LC3PLUS_Error err) {
 		return "Invalid cutoff frequency";
 	case LC3PLUS_PADDING_ERROR:
 		return "Padding error";
+	case LC3PLUS_LFE_MODE_NOT_SUPPORTED:
+		return "LFE not supported";
 	case FRAMESIZE_ERROR:
 		return "Framesize error";
-	default:
-		debug("Unknown error code: %#x", err);
-		return "Unknown error";
 	}
+	debug("Unknown error code: %#x", err);
+	return "Unknown error";
 }
 #endif
 
@@ -400,10 +428,9 @@ const char *ldacBT_strerror(int err) {
 		return "EQMID limited";
 	case LDACBT_ERR_DEC_CONFIG_UPDATED:
 		return "Configuration updated";
-	default:
-		debug("Unknown error code: %#x (API: %u, handle: %u, block: %u)",
-				err, LDACBT_API_ERR(err), LDACBT_HANDLE_ERR(err), LDACBT_BLOCK_ERR(err));
-		return "Unknown error";
 	}
+	debug("Unknown error code: %#x (API: %u, handle: %u, block: %u)",
+			err, LDACBT_API_ERR(err), LDACBT_HANDLE_ERR(err), LDACBT_BLOCK_ERR(err));
+	return "Unknown error";
 }
 #endif

@@ -1,6 +1,6 @@
 /*
  * BlueALSA - bluealsa-dbus.c
- * Copyright (c) 2016-2023 Arkadiusz Bokowy
+ * Copyright (c) 2016-2024 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -296,10 +296,10 @@ static bool ba_variant_populate_sep(GVariantBuilder *props, const struct a2dp_se
 	if (!codec->enabled)
 		return false;
 
-	uint8_t caps[sizeof(sep->capabilities)];
+	a2dp_t caps = sep->capabilities;
 	size_t size = MIN(sep->capabilities_size, sizeof(caps));
-	if (a2dp_filter_capabilities(codec, memcpy(caps, &sep->capabilities, size), size) != 0) {
-		error("Couldn't filter %s capabilities: %s",
+	if (a2dp_filter_capabilities(codec, &codec->capabilities, &caps, size) != 0) {
+		error("Couldn't filter %s SEP capabilities: %s",
 				a2dp_codecs_codec_id_to_string(sep->codec_id),
 				strerror(errno));
 		return false;
@@ -307,42 +307,7 @@ static bool ba_variant_populate_sep(GVariantBuilder *props, const struct a2dp_se
 
 	g_variant_builder_init(props, G_VARIANT_TYPE("a{sv}"));
 	g_variant_builder_add(props, "{sv}", "Capabilities", g_variant_new_fixed_array(
-				G_VARIANT_TYPE_BYTE, caps, size, sizeof(uint8_t)));
-
-	switch (codec->codec_id) {
-	case A2DP_CODEC_SBC:
-		break;
-#if ENABLE_MPEG
-	case A2DP_CODEC_MPEG12:
-		break;
-#endif
-#if ENABLE_AAC
-	case A2DP_CODEC_MPEG24:
-		break;
-#endif
-#if ENABLE_APTX
-	case A2DP_CODEC_VENDOR_APTX:
-		break;
-#endif
-#if ENABLE_APTX_HD
-	case A2DP_CODEC_VENDOR_APTX_HD:
-		break;
-#endif
-#if ENABLE_FASTSTREAM
-	case A2DP_CODEC_VENDOR_FASTSTREAM:
-		break;
-#endif
-#if ENABLE_LC3PLUS
-	case A2DP_CODEC_VENDOR_LC3PLUS:
-		break;
-#endif
-#if ENABLE_LDAC
-	case A2DP_CODEC_VENDOR_LDAC:
-		break;
-#endif
-	default:
-		g_assert_not_reached();
-	}
+				G_VARIANT_TYPE_BYTE, &caps, size, sizeof(uint8_t)));
 
 	return true;
 }
@@ -510,21 +475,23 @@ static void bluealsa_pcm_open(GDBusMethodInvocation *inv, void *userdata) {
 	}
 
 	pthread_mutex_lock(&pcm->mutex);
+
 	/* get correct PIPE endpoint - PIPE is unidirectional */
 	pcm->fd = pcm_fds[is_sink ? 0 : 1];
 	/* set newly opened PCM as active */
 	pcm->paused = false;
-	pthread_mutex_unlock(&pcm->mutex);
 
 	GIOChannel *ch = g_io_channel_unix_new(pcm_fds[2]);
 	g_io_channel_set_close_on_unref(ch, TRUE);
 	g_io_channel_set_encoding(ch, NULL, NULL);
 	g_io_channel_set_buffered(ch, FALSE);
 
-	g_io_add_watch_full(ch, G_PRIORITY_DEFAULT, G_IO_IN,
-			bluealsa_pcm_controller, ba_transport_pcm_ref(pcm),
+	pcm->controller = g_io_create_watch_full(ch, G_PRIORITY_DEFAULT,
+			G_IO_IN, bluealsa_pcm_controller, ba_transport_pcm_ref(pcm),
 			(GDestroyNotify)ba_transport_pcm_unref);
 	g_io_channel_unref(ch);
+
+	pthread_mutex_unlock(&pcm->mutex);
 
 	/* notify our audio thread that the FIFO is ready */
 	ba_transport_pcm_signal_send(pcm, BA_TRANSPORT_PCM_SIGNAL_OPEN);
@@ -645,6 +612,7 @@ static void bluealsa_pcm_select_codec(GDBusMethodInvocation *inv, void *userdata
 
 	a2dp_t a2dp_configuration = {};
 	size_t a2dp_configuration_size = 0;
+	bool conformance_check = true;
 
 	g_variant_get(params, "(&sa{sv})", &codec_name, &properties);
 	while (g_variant_iter_next(properties, "{&sv}", &property, &value)) {
@@ -663,6 +631,10 @@ static void bluealsa_pcm_select_codec(GDBusMethodInvocation *inv, void *userdata
 
 			memcpy(&a2dp_configuration, data, a2dp_configuration_size);
 
+		}
+		else if (strcmp(property, "NonConformant") == 0 &&
+				g_variant_validate_value(value, G_VARIANT_TYPE_BOOLEAN, property)) {
+			conformance_check = !g_variant_get_boolean(value);
 		}
 
 		g_variant_unref(value);
@@ -702,21 +674,42 @@ static void bluealsa_pcm_select_codec(GDBusMethodInvocation *inv, void *userdata
 			goto fail;
 		}
 
-		/* setup default codec configuration */
-		memcpy(&sep->configuration, &sep->capabilities, sep->capabilities_size);
-		if (a2dp_select_configuration(codec, &sep->configuration, sep->capabilities_size) == -1)
-			goto fail;
+		if (a2dp_configuration_size == 0) {
+			/* setup default codec configuration */
 
-		/* use codec configuration blob provided by user */
-		if (a2dp_configuration_size != 0) {
-			uint32_t rv;
-			if ((rv = a2dp_check_configuration(codec, &a2dp_configuration,
-						a2dp_configuration_size)) != A2DP_CHECK_OK) {
-				error("Invalid configuration: %s: %#x", "Invalid configuration blob", rv);
-				errmsg = "Invalid configuration blob";
+			const size_t size = sep->capabilities_size;
+			memcpy(&sep->configuration, &sep->capabilities, size);
+			if (a2dp_select_configuration(codec, &sep->configuration, size) == -1)
 				goto fail;
+
+		}
+		else {
+			/* use codec configuration blob provided by user */
+
+			if (conformance_check) {
+
+				a2dp_filter_capabilities(codec, &sep->capabilities,
+						&a2dp_configuration, a2dp_configuration_size);
+
+				enum a2dp_check_err rv;
+				if ((rv = a2dp_check_configuration(codec, &a2dp_configuration,
+							a2dp_configuration_size)) != A2DP_CHECK_OK) {
+					errmsg = a2dp_check_strerror(rv);
+					goto fail;
+				}
+
 			}
-			memcpy(&sep->configuration, &a2dp_configuration, sep->capabilities_size);
+			else {
+
+				if (a2dp_configuration_size != sep->capabilities_size) {
+					errmsg = a2dp_check_strerror(A2DP_CHECK_ERR_SIZE);
+					goto fail;
+				}
+
+			}
+
+			memcpy(&sep->configuration, &a2dp_configuration, a2dp_configuration_size);
+
 		}
 
 		if (ba_transport_select_codec_a2dp(t, sep) == -1)

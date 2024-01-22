@@ -128,10 +128,10 @@ CK_START_TEST(test_a2dp_get_vendor_codec_id) {
 	ck_assert_int_eq(a2dp_get_vendor_codec_id(cfg0, sizeof(cfg0)), 0xFFFF);
 	ck_assert_int_eq(errno, EINVAL);
 
-	a2dp_aptx_t cfg1 = { A2DP_SET_VENDOR_ID_CODEC_ID(APTX_VENDOR_ID, APTX_CODEC_ID), 0, 0 };
+	a2dp_aptx_t cfg1 = { A2DP_VENDOR_INFO_INIT(APTX_VENDOR_ID, APTX_CODEC_ID), 0, 0 };
 	ck_assert_int_eq(a2dp_get_vendor_codec_id(&cfg1, sizeof(cfg1)), A2DP_CODEC_VENDOR_APTX);
 
-	a2dp_aptx_t cfg2 = { A2DP_SET_VENDOR_ID_CODEC_ID(APTX_VENDOR_ID, 0x69), 0, 0 };
+	a2dp_aptx_t cfg2 = { A2DP_VENDOR_INFO_INIT(APTX_VENDOR_ID, 0x69), 0, 0 };
 	ck_assert_int_eq(a2dp_get_vendor_codec_id(&cfg2, sizeof(cfg2)), 0xFFFF);
 	ck_assert_int_eq(errno, ENOTSUP);
 
@@ -160,14 +160,23 @@ CK_START_TEST(test_a2dp_check_configuration) {
 	};
 
 	ck_assert_int_eq(a2dp_check_configuration(&a2dp_sbc_source,
-				&cfg_invalid, sizeof(cfg_invalid)),
-			A2DP_CHECK_ERR_SAMPLING | A2DP_CHECK_ERR_CHANNELS | A2DP_CHECK_ERR_SBC_SUB_BANDS);
+				&cfg_invalid, sizeof(cfg_invalid)), A2DP_CHECK_ERR_SAMPLING);
+
+#if ENABLE_AAC
+	a2dp_aac_t cfg_aac_invalid = {
+		/* FDK-AAC encoder does not support AAC Long Term Prediction */
+		.object_type = AAC_OBJECT_TYPE_MPEG4_LTP,
+		A2DP_AAC_INIT_FREQUENCY(AAC_SAMPLING_FREQ_44100)
+		.channels = AAC_CHANNELS_1 };
+	ck_assert_int_eq(a2dp_check_configuration(&a2dp_aac_source,
+			&cfg_aac_invalid, sizeof(cfg_aac_invalid)), A2DP_CHECK_ERR_OBJECT_TYPE);
+#endif
 
 } CK_END_TEST
 
 CK_START_TEST(test_a2dp_filter_capabilities) {
 
-	a2dp_sbc_t cfg = {
+	a2dp_sbc_t caps = {
 		.frequency = SBC_SAMPLING_FREQ_44100,
 		.channel_mode = SBC_CHANNEL_MODE_MONO | SBC_CHANNEL_MODE_STEREO,
 		.block_length = SBC_BLOCK_LENGTH_4 | SBC_BLOCK_LENGTH_8,
@@ -177,20 +186,23 @@ CK_START_TEST(test_a2dp_filter_capabilities) {
 		.max_bitpool = 255,
 	};
 
-	ck_assert_int_eq(a2dp_filter_capabilities(&a2dp_sbc_source, &cfg, sizeof(cfg) + 1), -1);
+	ck_assert_int_eq(a2dp_filter_capabilities(&a2dp_sbc_source,
+			&a2dp_sbc_source.capabilities, &caps, sizeof(caps) + 1), -1);
 	ck_assert_int_eq(errno, EINVAL);
 
-	hexdump("Capabilities original", &cfg, sizeof(cfg), true);
-	ck_assert_int_eq(a2dp_filter_capabilities(&a2dp_sbc_source, &cfg, sizeof(cfg)), 0);
+	hexdump("Capabilities A", &caps, sizeof(caps), true);
+	hexdump("Capabilities B", &a2dp_sbc_source.capabilities, sizeof(caps), true);
+	ck_assert_int_eq(a2dp_filter_capabilities(&a2dp_sbc_source,
+			&a2dp_sbc_source.capabilities, &caps, sizeof(caps)), 0);
 
-	hexdump("Capabilities filtered", &cfg, sizeof(cfg), true);
-	ck_assert_int_eq(cfg.frequency, SBC_SAMPLING_FREQ_44100);
-	ck_assert_int_eq(cfg.channel_mode, SBC_CHANNEL_MODE_MONO | SBC_CHANNEL_MODE_STEREO);
-	ck_assert_int_eq(cfg.block_length, SBC_BLOCK_LENGTH_4 | SBC_BLOCK_LENGTH_8);
-	ck_assert_int_eq(cfg.subbands, SBC_SUBBANDS_4);
-	ck_assert_int_eq(cfg.allocation_method, SBC_ALLOCATION_SNR);
-	ck_assert_int_eq(cfg.min_bitpool, MAX(SBC_MIN_BITPOOL, 42));
-	ck_assert_int_eq(cfg.max_bitpool, MIN(SBC_MAX_BITPOOL, 255));
+	hexdump("filterion", &caps, sizeof(caps), true);
+	ck_assert_int_eq(caps.frequency, SBC_SAMPLING_FREQ_44100);
+	ck_assert_int_eq(caps.channel_mode, SBC_CHANNEL_MODE_MONO | SBC_CHANNEL_MODE_STEREO);
+	ck_assert_int_eq(caps.block_length, SBC_BLOCK_LENGTH_4 | SBC_BLOCK_LENGTH_8);
+	ck_assert_int_eq(caps.subbands, SBC_SUBBANDS_4);
+	ck_assert_int_eq(caps.allocation_method, SBC_ALLOCATION_SNR);
+	ck_assert_int_eq(caps.min_bitpool, MAX(SBC_MIN_BITPOOL, 42));
+	ck_assert_int_eq(caps.max_bitpool, MIN(SBC_MAX_BITPOOL, 255));
 
 } CK_END_TEST
 
@@ -242,8 +254,8 @@ CK_START_TEST(test_a2dp_select_configuration) {
 #if ENABLE_AAC
 	a2dp_aac_t cfg_aac = {
 		/* FDK-AAC encoder does not support AAC Long Term Prediction */
-		.object_type = AAC_OBJECT_TYPE_MPEG4_AAC_LTP,
-		AAC_INIT_FREQUENCY(AAC_SAMPLING_FREQ_44100 | AAC_SAMPLING_FREQ_96000)
+		.object_type = AAC_OBJECT_TYPE_MPEG4_LTP,
+		A2DP_AAC_INIT_FREQUENCY(AAC_SAMPLING_FREQ_44100 | AAC_SAMPLING_FREQ_96000)
 		.channels = AAC_CHANNELS_1 };
 	ck_assert_int_eq(a2dp_select_configuration(&a2dp_aac_source, &cfg_aac, sizeof(cfg_aac)), -1);
 #endif

@@ -474,9 +474,10 @@ static void bluez_endpoint_set_configuration(GDBusMethodInvocation *inv, void *u
 			const void *data = g_variant_get_fixed_array(value, &size, sizeof(char));
 			memcpy(&configuration, data, MIN(size, sizeof(configuration)));
 
-			uint32_t rv;
+			enum a2dp_check_err rv;
 			if ((rv = a2dp_check_configuration(codec, data, size)) != A2DP_CHECK_OK) {
-				error("Invalid configuration: %s: %#x", "Invalid configuration blob", rv);
+				error("Invalid configuration: %s: %s",
+						"Invalid configuration blob", a2dp_check_strerror(rv));
 				goto fail;
 			}
 
@@ -756,21 +757,12 @@ fail:
 /**
  * Register A2DP endpoints. */
 static void bluez_register_a2dp_all(struct ba_adapter *adapter) {
-
 	struct a2dp_codec * const * cc = a2dp_codecs;
 	for (const struct a2dp_codec *c = *cc; c != NULL; c = *++cc) {
-		switch (c->dir) {
-		case A2DP_SOURCE:
-			if (config.profile.a2dp_source && c->enabled)
-				bluez_export_a2dp(adapter, c);
-			break;
-		case A2DP_SINK:
-			if (config.profile.a2dp_sink && c->enabled)
-				bluez_export_a2dp(adapter, c);
-			break;
-		}
+		if (!c->enabled)
+			continue;
+		bluez_export_a2dp(adapter, c);
 	}
-
 }
 
 static GVariant *bluez_battery_provider_iface_skeleton_get_property(

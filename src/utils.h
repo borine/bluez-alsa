@@ -1,6 +1,6 @@
 /*
  * BlueALSA - utils.h
- * Copyright (c) 2016-2023 Arkadiusz Bokowy
+ * Copyright (c) 2016-2024 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -30,6 +30,9 @@ char *g_variant_sanitize_object_path(char *path);
 bool g_variant_validate_value(GVariant *value, const GVariantType *type,
 		const char *name);
 
+GSource *g_io_create_watch_full(GIOChannel *channel, int priority,
+		GIOCondition cond, GIOFunc func, void *userdata, GDestroyNotify notify);
+
 unsigned int g_bdaddr_hash(const void *v);
 gboolean g_bdaddr_equal(const void *v1, const void *v2);
 
@@ -46,7 +49,7 @@ const char *aacenc_strerror(AACENC_ERROR err);
 #endif
 
 #if ENABLE_LC3PLUS
-# include <lc3.h>
+# include <lc3plus.h>
 const char *lc3plus_strerror(LC3PLUS_Error err);
 #endif
 

@@ -1,6 +1,6 @@
 /*
  * BlueALSA - cmd-codec.c
- * Copyright (c) 2016-2023 Arkadiusz Bokowy
+ * Copyright (c) 2016-2024 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -8,6 +8,7 @@
  *
  */
 
+#include <stdbool.h>
 #include <errno.h>
 #include <getopt.h>
 #include <stdint.h>
@@ -26,6 +27,7 @@ static void usage(const char *command) {
 	cli_print_usage("%s [OPTION]... PCM-PATH [CODEC [CONFIG]]", command);
 	printf("\nOptions:\n"
 			"  -h, --help\t\tShow this message and exit\n"
+			"  -f, --force\t\tForce codec configuration (skip conformance check)\n"
 			"\nPositional arguments:\n"
 			"  PCM-PATH\tBlueALSA PCM D-Bus object path\n"
 			"  CODEC\t\tCodec identifier for setting new codec\n"
@@ -38,22 +40,33 @@ static void usage(const char *command) {
 static int cmd_codec_func(int argc, char *argv[]) {
 
 	int opt;
-	const char *opts = "h";
+	const char *opts = "hqvf";
 	const struct option longopts[] = {
 		{ "help", no_argument, NULL, 'h' },
+		{ "quiet", no_argument, NULL, 'q' },
+		{ "verbose", no_argument, NULL, 'v' },
+		{ "force", no_argument, NULL, 'f' },
 		{ 0 },
 	};
 
+	bool force = false;
+
 	opterr = 0;
-	while ((opt = getopt_long(argc, argv, opts, longopts, NULL)) != -1)
+	while ((opt = getopt_long(argc, argv, opts, longopts, NULL)) != -1) {
+		if (cli_parse_common_options(opt))
+			continue;
 		switch (opt) {
 		case 'h' /* --help */ :
 			usage(argv[0]);
 			return EXIT_SUCCESS;
+		case 'f' /* --force */ :
+			force = true;
+			break;
 		default:
 			cmd_print_error("Invalid argument '%s'", argv[optind - 1]);
 			return EXIT_FAILURE;
 		}
+	}
 
 	if (argc - optind < 1) {
 		cmd_print_error("Missing BlueALSA PCM path argument");
@@ -79,9 +92,10 @@ static int cmd_codec_func(int argc, char *argv[]) {
 		return EXIT_SUCCESS;
 	}
 
-	const char *codec = argv[optind + 1];
+	const char *codec = ba_dbus_pcm_codec_get_canonical_name(argv[optind + 1]);
 	int result = EXIT_FAILURE;
 
+	unsigned int flags = BA_PCM_SELECT_CODEC_FLAG_NONE;
 	uint8_t codec_config[64];
 	ssize_t codec_config_len = 0;
 
@@ -98,8 +112,11 @@ static int cmd_codec_func(int argc, char *argv[]) {
 		}
 	}
 
-	if (!ba_dbus_pcm_select_codec(&config.dbus, path,
-				ba_dbus_pcm_codec_get_canonical_name(codec), codec_config, codec_config_len, &err))
+	if (force)
+		flags |= BA_PCM_SELECT_CODEC_FLAG_NON_CONFORMANT;
+
+	if (!ba_dbus_pcm_select_codec(&config.dbus, path, codec,
+				codec_config, codec_config_len, flags, &err))
 		goto fail;
 
 	result = EXIT_SUCCESS;

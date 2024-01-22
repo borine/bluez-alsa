@@ -1,6 +1,6 @@
 /*
  * BlueALSA - a2dp-lc3plus.c
- * Copyright (c) 2016-2023 Arkadiusz Bokowy
+ * Copyright (c) 2016-2024 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -9,7 +9,10 @@
  */
 
 #include "a2dp-lc3plus.h"
-/* IWYU pragma: no_include "config.h" */
+
+#if HAVE_CONFIG_H
+# include <config.h>
+#endif
 
 #include <errno.h>
 #include <pthread.h>
@@ -20,12 +23,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <glib.h>
-
-#include <lc3.h>
+#include <lc3plus.h>
 
 #include "a2dp.h"
 #include "audio.h"
+#include "ba-transport.h"
 #include "ba-transport-pcm.h"
 #include "bluealsa-config.h"
 #include "io.h"
@@ -36,77 +38,6 @@
 #include "shared/ffb.h"
 #include "shared/log.h"
 #include "shared/rt.h"
-
-static const struct a2dp_channel_mode a2dp_lc3plus_channels[] = {
-	{ A2DP_CHM_MONO, 1, LC3PLUS_CHANNELS_1 },
-	{ A2DP_CHM_STEREO, 2, LC3PLUS_CHANNELS_2 },
-};
-
-static const struct a2dp_sampling_freq a2dp_lc3plus_samplings[] = {
-	{ 48000, LC3PLUS_SAMPLING_FREQ_48000 },
-	{ 96000, LC3PLUS_SAMPLING_FREQ_96000 },
-};
-
-struct a2dp_codec a2dp_lc3plus_sink = {
-	.dir = A2DP_SINK,
-	.codec_id = A2DP_CODEC_VENDOR_LC3PLUS,
-	.capabilities.lc3plus = {
-		.info = A2DP_SET_VENDOR_ID_CODEC_ID(LC3PLUS_VENDOR_ID, LC3PLUS_CODEC_ID),
-		.frame_duration =
-			LC3PLUS_FRAME_DURATION_025 |
-			LC3PLUS_FRAME_DURATION_050 |
-			LC3PLUS_FRAME_DURATION_100,
-		.channels =
-			LC3PLUS_CHANNELS_1 |
-			LC3PLUS_CHANNELS_2,
-		LC3PLUS_INIT_FREQUENCY(
-				LC3PLUS_SAMPLING_FREQ_48000 |
-				LC3PLUS_SAMPLING_FREQ_96000)
-	},
-	.capabilities_size = sizeof(a2dp_lc3plus_t),
-	.channels[0] = a2dp_lc3plus_channels,
-	.channels_size[0] = ARRAYSIZE(a2dp_lc3plus_channels),
-	.samplings[0] = a2dp_lc3plus_samplings,
-	.samplings_size[0] = ARRAYSIZE(a2dp_lc3plus_samplings),
-};
-
-struct a2dp_codec a2dp_lc3plus_source = {
-	.dir = A2DP_SOURCE,
-	.codec_id = A2DP_CODEC_VENDOR_LC3PLUS,
-	.capabilities.lc3plus = {
-		.info = A2DP_SET_VENDOR_ID_CODEC_ID(LC3PLUS_VENDOR_ID, LC3PLUS_CODEC_ID),
-		.frame_duration =
-			LC3PLUS_FRAME_DURATION_025 |
-			LC3PLUS_FRAME_DURATION_050 |
-			LC3PLUS_FRAME_DURATION_100,
-		.channels =
-			LC3PLUS_CHANNELS_1 |
-			LC3PLUS_CHANNELS_2,
-		LC3PLUS_INIT_FREQUENCY(
-				LC3PLUS_SAMPLING_FREQ_48000 |
-				LC3PLUS_SAMPLING_FREQ_96000)
-	},
-	.capabilities_size = sizeof(a2dp_lc3plus_t),
-	.channels[0] = a2dp_lc3plus_channels,
-	.channels_size[0] = ARRAYSIZE(a2dp_lc3plus_channels),
-	.samplings[0] = a2dp_lc3plus_samplings,
-	.samplings_size[0] = ARRAYSIZE(a2dp_lc3plus_samplings),
-};
-
-void a2dp_lc3plus_init(void) {
-}
-
-void a2dp_lc3plus_transport_init(struct ba_transport *t) {
-
-	const struct a2dp_codec *codec = t->a2dp.codec;
-
-	t->a2dp.pcm.format = BA_TRANSPORT_PCM_FORMAT_S24_4LE;
-	t->a2dp.pcm.channels = a2dp_codec_lookup_channels(codec,
-			t->a2dp.configuration.lc3plus.channels, false);
-	t->a2dp.pcm.sampling = a2dp_codec_lookup_frequency(codec,
-			LC3PLUS_GET_FREQUENCY(t->a2dp.configuration.lc3plus), false);
-
-}
 
 static bool a2dp_lc3plus_supported(int samplerate, int channels) {
 
@@ -604,14 +535,177 @@ fail_init:
 	return NULL;
 }
 
-int a2dp_lc3plus_transport_start(struct ba_transport *t) {
+static const struct a2dp_channels a2dp_lc3plus_channels[] = {
+	{ 1, LC3PLUS_CHANNELS_1 },
+	{ 2, LC3PLUS_CHANNELS_2 },
+	{ 0 },
+};
 
-	if (t->profile & BA_TRANSPORT_PROFILE_A2DP_SOURCE)
-		return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_lc3plus_enc_thread, "ba-a2dp-lc3p");
+static const struct a2dp_sampling a2dp_lc3plus_samplings[] = {
+	{ 48000, LC3PLUS_SAMPLING_FREQ_48000 },
+	{ 96000, LC3PLUS_SAMPLING_FREQ_96000 },
+	{ 0 },
+};
 
-	if (t->profile & BA_TRANSPORT_PROFILE_A2DP_SINK)
-		return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_lc3plus_dec_thread, "ba-a2dp-lc3p");
+static int a2dp_lc3plus_configuration_select(
+		const struct a2dp_codec *codec,
+		void *capabilities) {
 
-	g_assert_not_reached();
-	return -1;
+	a2dp_lc3plus_t *caps = capabilities;
+	const a2dp_lc3plus_t saved = *caps;
+
+	/* narrow capabilities to values supported by BlueALSA */
+	if (a2dp_filter_capabilities(codec, &codec->capabilities,
+				caps, sizeof(*caps)) != 0)
+		return -1;
+
+	if (caps->frame_duration & LC3PLUS_FRAME_DURATION_100)
+		caps->frame_duration = LC3PLUS_FRAME_DURATION_100;
+	else if (caps->frame_duration & LC3PLUS_FRAME_DURATION_050)
+		caps->frame_duration = LC3PLUS_FRAME_DURATION_050;
+	else if (caps->frame_duration & LC3PLUS_FRAME_DURATION_025)
+		caps->frame_duration = LC3PLUS_FRAME_DURATION_025;
+	else {
+		error("LC3plus: No supported frame durations: %#x", saved.frame_duration);
+		return errno = ENOTSUP, -1;
+	}
+
+	const struct a2dp_channels *channels;
+	if ((channels = a2dp_channels_select(a2dp_lc3plus_channels, caps->channels)) != NULL)
+		caps->channels = channels->value;
+	else {
+		error("LC3plus: No supported channels: %#x", saved.channels);
+		return errno = ENOTSUP, -1;
+	}
+
+	const struct a2dp_sampling *sampling;
+	const uint16_t caps_frequency = A2DP_LC3PLUS_GET_FREQUENCY(*caps);
+	if ((sampling = a2dp_sampling_select(a2dp_lc3plus_samplings, caps_frequency)) != NULL)
+		A2DP_LC3PLUS_SET_FREQUENCY(*caps, sampling->value);
+	else {
+		error("LC3plus: No supported sampling frequencies: %#x", A2DP_LC3PLUS_GET_FREQUENCY(saved));
+		return errno = ENOTSUP, -1;
+	}
+
+	return 0;
 }
+
+static int a2dp_lc3plus_configuration_check(
+		const struct a2dp_codec *codec,
+		const void *configuration) {
+
+	const a2dp_lc3plus_t *conf = configuration;
+	a2dp_lc3plus_t conf_v = *conf;
+
+	/* validate configuration against BlueALSA capabilities */
+	if (a2dp_filter_capabilities(codec, &codec->capabilities,
+				&conf_v, sizeof(conf_v)) != 0)
+		return A2DP_CHECK_ERR_SIZE;
+
+	switch (conf_v.frame_duration) {
+	case LC3PLUS_FRAME_DURATION_025:
+	case LC3PLUS_FRAME_DURATION_050:
+	case LC3PLUS_FRAME_DURATION_100:
+		break;
+	default:
+		debug("LC3plus: Invalid frame duration: %#x", conf->frame_duration);
+		return A2DP_CHECK_ERR_FRAME_DURATION;
+	}
+
+	if (a2dp_channels_lookup(a2dp_lc3plus_channels, conf_v.channels) == NULL) {
+		debug("LC3plus: Invalid channel mode: %#x", conf->channels);
+		return A2DP_CHECK_ERR_CHANNEL_MODE;
+	}
+
+	uint16_t conf_frequency = A2DP_LC3PLUS_GET_FREQUENCY(conf_v);
+	if (a2dp_sampling_lookup(a2dp_lc3plus_samplings, conf_frequency) == NULL) {
+		debug("LC3plus: Invalid sampling frequency: %#x", A2DP_LC3PLUS_GET_FREQUENCY(*conf));
+		return A2DP_CHECK_ERR_SAMPLING;
+	}
+
+	return A2DP_CHECK_OK;
+}
+
+static int a2dp_lc3plus_transport_init(struct ba_transport *t) {
+
+	const struct a2dp_channels *channels;
+	if ((channels = a2dp_channels_lookup(a2dp_lc3plus_channels,
+					t->a2dp.configuration.lc3plus.channels)) == NULL)
+		return -1;
+
+	const struct a2dp_sampling *sampling;
+	if ((sampling = a2dp_sampling_lookup(a2dp_lc3plus_samplings,
+					A2DP_LC3PLUS_GET_FREQUENCY(t->a2dp.configuration.lc3plus))) == NULL)
+		return -1;
+
+	t->a2dp.pcm.format = BA_TRANSPORT_PCM_FORMAT_S24_4LE;
+	t->a2dp.pcm.channels = channels->count;
+	t->a2dp.pcm.sampling = sampling->frequency;
+
+	return 0;
+}
+
+static int a2dp_lc3plus_source_init(struct a2dp_codec *codec) {
+	if (config.a2dp.force_mono)
+		codec->capabilities.lc3plus.channels = LC3PLUS_CHANNELS_1;
+	if (config.a2dp.force_44100)
+		warn("LC3plus: 44.1 kHz sampling frequency not supported");
+	return 0;
+}
+
+static int a2dp_lc3plus_source_transport_start(struct ba_transport *t) {
+	return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_lc3plus_enc_thread, "ba-a2dp-lc3p");
+}
+
+struct a2dp_codec a2dp_lc3plus_source = {
+	.dir = A2DP_SOURCE,
+	.codec_id = A2DP_CODEC_VENDOR_LC3PLUS,
+	.synopsis = "A2DP Source (LC3plus)",
+	.capabilities.lc3plus = {
+		.info = A2DP_VENDOR_INFO_INIT(LC3PLUS_VENDOR_ID, LC3PLUS_CODEC_ID),
+		.frame_duration =
+			LC3PLUS_FRAME_DURATION_025 |
+			LC3PLUS_FRAME_DURATION_050 |
+			LC3PLUS_FRAME_DURATION_100,
+		.channels =
+			LC3PLUS_CHANNELS_1 |
+			LC3PLUS_CHANNELS_2,
+		A2DP_LC3PLUS_INIT_FREQUENCY(
+				LC3PLUS_SAMPLING_FREQ_48000 |
+				LC3PLUS_SAMPLING_FREQ_96000)
+	},
+	.capabilities_size = sizeof(a2dp_lc3plus_t),
+	.init = a2dp_lc3plus_source_init,
+	.configuration_select = a2dp_lc3plus_configuration_select,
+	.configuration_check = a2dp_lc3plus_configuration_check,
+	.transport_init = a2dp_lc3plus_transport_init,
+	.transport_start = a2dp_lc3plus_source_transport_start,
+};
+
+static int a2dp_lc3plus_sink_transport_start(struct ba_transport *t) {
+	return ba_transport_pcm_start(&t->a2dp.pcm, a2dp_lc3plus_dec_thread, "ba-a2dp-lc3p");
+}
+
+struct a2dp_codec a2dp_lc3plus_sink = {
+	.dir = A2DP_SINK,
+	.codec_id = A2DP_CODEC_VENDOR_LC3PLUS,
+	.synopsis = "A2DP Sink (LC3plus)",
+	.capabilities.lc3plus = {
+		.info = A2DP_VENDOR_INFO_INIT(LC3PLUS_VENDOR_ID, LC3PLUS_CODEC_ID),
+		.frame_duration =
+			LC3PLUS_FRAME_DURATION_025 |
+			LC3PLUS_FRAME_DURATION_050 |
+			LC3PLUS_FRAME_DURATION_100,
+		.channels =
+			LC3PLUS_CHANNELS_1 |
+			LC3PLUS_CHANNELS_2,
+		A2DP_LC3PLUS_INIT_FREQUENCY(
+				LC3PLUS_SAMPLING_FREQ_48000 |
+				LC3PLUS_SAMPLING_FREQ_96000)
+	},
+	.capabilities_size = sizeof(a2dp_lc3plus_t),
+	.configuration_select = a2dp_lc3plus_configuration_select,
+	.configuration_check = a2dp_lc3plus_configuration_check,
+	.transport_init = a2dp_lc3plus_transport_init,
+	.transport_start = a2dp_lc3plus_sink_transport_start,
+};

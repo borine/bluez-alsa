@@ -1,6 +1,6 @@
 /*
  * BlueALSA - a2dp.h
- * Copyright (c) 2016-2023 Arkadiusz Bokowy
+ * Copyright (c) 2016-2024 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -27,43 +27,56 @@ enum a2dp_dir {
 	A2DP_SINK = !A2DP_SOURCE,
 };
 
-enum a2dp_chm {
-	A2DP_CHM_MONO = 0,
-	/* fixed bit-rate for each channel */
-	A2DP_CHM_DUAL_CHANNEL,
-	/* channel bits allocated dynamically */
-	A2DP_CHM_STEREO,
-	/* L+R (mid) and L-R (side) encoding */
-	A2DP_CHM_JOINT_STEREO,
-};
-
-struct a2dp_channel_mode {
-	enum a2dp_chm mode;
-	unsigned int channels;
+struct a2dp_channels {
+	unsigned int count;
 	uint16_t value;
 };
 
-struct a2dp_sampling_freq {
+struct a2dp_sampling {
 	unsigned int frequency;
 	uint16_t value;
 };
 
+/* XXX: avoid circular dependency */
+struct ba_transport;
+
 struct a2dp_codec {
+
 	enum a2dp_dir dir;
 	uint16_t codec_id;
-	/* support for A2DP back-channel */
-	bool backchannel;
+	const char *synopsis;
+
 	/* capabilities configuration element */
 	a2dp_t capabilities;
 	size_t capabilities_size;
-	/* list of supported channel modes */
-	const struct a2dp_channel_mode *channels[2];
-	size_t channels_size[2];
-	/* list of supported sampling frequencies */
-	const struct a2dp_sampling_freq *samplings[2];
-	size_t samplings_size[2];
+
+	/* callback function for codec initialization */
+	int (*init)(struct a2dp_codec *codec);
+
+	/* callback function for codec-specific capabilities filtering; if this
+	 * function is not provided, the a2dp_filter_capabilities() will return
+	 * simple bitwise AND of given capabilities */
+	int (*capabilities_filter)(
+			const struct a2dp_codec *codec,
+			const void *capabilities_mask,
+			void *capabilities);
+
+	/* callback function for selecting configuration */
+	int (*configuration_select)(
+			const struct a2dp_codec *codec,
+			void *capabilities);
+
+	/* callback function for checking configuration correctness */
+	int (*configuration_check)(
+			const struct a2dp_codec *codec,
+			const void *configuration);
+
+	int (*transport_init)(struct ba_transport *t);
+	int (*transport_start)(struct ba_transport *t);
+
 	/* determine whether codec shall be enabled */
 	bool enabled;
+
 };
 
 /**
@@ -93,41 +106,29 @@ const struct a2dp_codec *a2dp_codec_lookup(
 		uint16_t codec_id,
 		enum a2dp_dir dir);
 
-unsigned int a2dp_codec_lookup_channels(
-		const struct a2dp_codec *codec,
-		uint16_t capability_value,
-		bool backchannel);
+const struct a2dp_channels *a2dp_channels_lookup(
+		const struct a2dp_channels *channels,
+		uint16_t value);
 
-unsigned int a2dp_codec_lookup_frequency(
-		const struct a2dp_codec *codec,
-		uint16_t capability_value,
-		bool backchannel);
+const struct a2dp_channels *a2dp_channels_select(
+		const struct a2dp_channels *channels,
+		uint16_t capabilities);
+
+const struct a2dp_sampling *a2dp_sampling_lookup(
+		const struct a2dp_sampling *samplings,
+		uint16_t value);
+
+const struct a2dp_sampling *a2dp_sampling_select(
+		const struct a2dp_sampling *samplings,
+		uint16_t capabilities);
 
 uint16_t a2dp_get_vendor_codec_id(
 		const void *capabilities,
 		size_t size);
 
-#define A2DP_CHECK_OK                    0
-#define A2DP_CHECK_ERR_SIZE              (1 << 0)
-#define A2DP_CHECK_ERR_CHANNELS          (1 << 1)
-#define A2DP_CHECK_ERR_CHANNELS_BC       (1 << 2)
-#define A2DP_CHECK_ERR_SAMPLING          (1 << 3)
-#define A2DP_CHECK_ERR_SAMPLING_BC       (1 << 4)
-#define A2DP_CHECK_ERR_SBC_ALLOCATION    (1 << 5)
-#define A2DP_CHECK_ERR_SBC_SUB_BANDS     (1 << 6)
-#define A2DP_CHECK_ERR_SBC_BLOCK_LENGTH  (1 << 7)
-#define A2DP_CHECK_ERR_MPEG_LAYER        (1 << 8)
-#define A2DP_CHECK_ERR_AAC_OBJ_TYPE      (1 << 9)
-#define A2DP_CHECK_ERR_FASTSTREAM_DIR    (1 << 10)
-#define A2DP_CHECK_ERR_LC3PLUS_DURATION  (1 << 11)
-
-uint32_t a2dp_check_configuration(
-		const struct a2dp_codec *codec,
-		const void *configuration,
-		size_t size);
-
 int a2dp_filter_capabilities(
 		const struct a2dp_codec *codec,
+		const void *capabilities_mask,
 		void *capabilities,
 		size_t size);
 
@@ -136,10 +137,32 @@ int a2dp_select_configuration(
 		void *capabilities,
 		size_t size);
 
-/* XXX: avoid circular dependency */
-struct ba_transport;
+enum a2dp_check_err {
+	A2DP_CHECK_OK = 0,
+	A2DP_CHECK_ERR_SIZE,
+	A2DP_CHECK_ERR_CHANNEL_MODE,
+	A2DP_CHECK_ERR_SAMPLING,
+	A2DP_CHECK_ERR_ALLOCATION_METHOD,
+	A2DP_CHECK_ERR_BIT_POOL_RANGE,
+	A2DP_CHECK_ERR_SUB_BANDS,
+	A2DP_CHECK_ERR_BLOCK_LENGTH,
+	A2DP_CHECK_ERR_MPEG_LAYER,
+	A2DP_CHECK_ERR_OBJECT_TYPE,
+	A2DP_CHECK_ERR_DIRECTIONS,
+	A2DP_CHECK_ERR_SAMPLING_VOICE,
+	A2DP_CHECK_ERR_SAMPLING_MUSIC,
+	A2DP_CHECK_ERR_FRAME_DURATION,
+};
 
-void a2dp_transport_init(
+enum a2dp_check_err a2dp_check_configuration(
+		const struct a2dp_codec *codec,
+		const void *configuration,
+		size_t size);
+
+const char *a2dp_check_strerror(
+		enum a2dp_check_err err);
+
+int a2dp_transport_init(
 		struct ba_transport *t);
 int a2dp_transport_start(
 		struct ba_transport *t);
