@@ -244,11 +244,11 @@ static bool io_thread_read(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, s
 	/* Set a deadline for this transfer to complete. */
 	frames_to_timespec(&temp, frames + asrs->frames, pcm->io.rate);
 	timespecadd(&temp, &asrs->ts0, &deadline);
-	if (difftimespec(&deadline, &asrs->ts, &timeout) > 0 &&
-			(timeout.tv_nsec > 50000 || timeout.tv_sec > 0)) {
+	if (difftimespec(&deadline, &asrs->ts, &timeout) > 0) {
 		/* we have already exceeded the time allowance for this read */
 		debug2("I/O thread too slow to maintain rate, lost sync");
-		return false;
+		timeout.tv_nsec = 0;
+		timeout.tv_sec = 0;
 	}
 
 	/* temporarily block all signals to prevent interruptions to timer */
@@ -303,11 +303,9 @@ static bool io_thread_read(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, s
 			ssize_t ret = read(pcm->ba_pcm_fd, pos, len);
 			if (ret == -1) {
 				SNDERR("PCM FIFO read error: %s", strerror(errno));
-				pcm->connected = false;
 				break;
 			}
 			if (ret == 0) {
-				pcm->connected = false;
 				break;
 			}
 			tframes += ret / pcm->frame_size;
@@ -330,15 +328,12 @@ static bool io_thread_read(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, s
 					tframes = frames;
 				}
 			}
-			else {
-				pcm->connected = false;
-				break;
-			}
+			break;
 		}
 	}
 
 	pthread_sigmask(SIG_SETMASK, &sigset_old, NULL);
-	return pcm->connected && tframes == frames;
+	return tframes == frames;
 }
 
 /**
@@ -367,7 +362,6 @@ static bool io_thread_write(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, 
 					continue;
 				if (errno != EPIPE)
 					SNDERR("PCM FIFO write error: %s", strerror(errno));
-				pcm->connected = false;
 				return false;
 			}
 			pos += ret;
@@ -511,6 +505,10 @@ fail:
 	pthread_mutex_unlock(&pcm->mutex);
 	pthread_cond_signal(&pcm->pause_cond);
 
+	/* once the io thread has failed, it cannot be re-started until the
+	 * server PCM connection has been closed and re-opened. The only way to
+	 * achieve that is to tell the application that the PCM is disconnected. */
+	pcm->connected = false;
 	eventfd_write(pcm->event_fd, 0xDEAD0000);
 
 	/* wait for cancellation from main thread */
