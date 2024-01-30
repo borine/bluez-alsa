@@ -83,6 +83,13 @@ bluealsa_SOURCES += \
 	a2dp-ldac.c
 endif
 
+if ENABLE_MIDI
+bluealsa_SOURCES += \
+	ble-midi.c \
+	bluez-midi.c \
+	midi.c
+endif
+
 if ENABLE_MPEG
 bluealsa_SOURCES += \
 	a2dp-mpeg.c
@@ -106,6 +113,7 @@ endif
 
 AM_CFLAGS = \
 	@AAC_CFLAGS@ \
+	@ALSA_CFLAGS@ \
 	@APTX_CFLAGS@ \
 	@APTX_HD_CFLAGS@ \
 	@BLUEZ_CFLAGS@ \
@@ -122,6 +130,7 @@ AM_CFLAGS = \
 
 LDADD = \
 	@AAC_LIBS@ \
+	@ALSA_LIBS@ \
 	@APTX_HD_LIBS@ \
 	@APTX_LIBS@ \
 	@BLUEZ_LIBS@ \
@@ -146,6 +155,9 @@ DBUSCONF_SUBS = \
 	$(SED) -e '$(DBUSCONF_SUBS)' < $< > $@
 
 CODEGEN_DEFS =
+if ENABLE_MIDI
+CODEGEN_DEFS += --define=ENABLE_MIDI
+endif
 
 .xml.c:
 	$(srcdir)/dbus-codegen.py --output $@ $(CODEGEN_DEFS) \

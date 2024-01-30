@@ -180,6 +180,9 @@ int main(int argc, char **argv) {
 		{ "mp3-algorithm", required_argument, NULL, 12 },
 		{ "mp3-vbr-quality", required_argument, NULL, 13 },
 #endif
+#if ENABLE_MIDI
+		{ "midi-advertisement", no_argument, NULL, 22 },
+#endif
 		{ "xapl-resp-name", required_argument, NULL, 16 },
 		{ 0, 0, 0, 0 },
 	};
@@ -230,6 +233,9 @@ int main(int argc, char **argv) {
 					"  --mp3-algorithm=TYPE\t\tselect LAME encoder algorithm type\n"
 					"  --mp3-vbr-quality=MODE\tset LAME encoder VBR quality mode\n"
 #endif
+#if ENABLE_MIDI
+					"  --midi-advertisement\t\tenable LE advertisement for BLE-MIDI\n"
+#endif
 					"  --xapl-resp-name=NAME\t\tset product name used by XAPL\n"
 					"\nAvailable BT profiles:\n"
 					"  - a2dp-source\tAdvanced Audio Source (v1.4)\n"
@@ -241,6 +247,9 @@ int main(int argc, char **argv) {
 					"  - hfp-hf\tHands-Free (v1.7)\n"
 					"  - hsp-ag\tHeadset Audio Gateway (v1.2)\n"
 					"  - hsp-hs\tHeadset (v1.2)\n"
+#if ENABLE_MIDI
+					"  - midi\tBluetooth LE MIDI (v1.0)\n"
+#endif
 					"\n"
 					"Available BT audio codecs:\n"
 					"  a2dp-source:\t%s\n"
@@ -305,6 +314,9 @@ int main(int argc, char **argv) {
 				{ "hfp-ag", &config.profile.hfp_ag },
 				{ "hsp-hs", &config.profile.hsp_hs },
 				{ "hsp-ag", &config.profile.hsp_ag },
+#if ENABLE_MIDI
+				{ "midi", &config.profile.midi },
+#endif
 			};
 
 			bool matched = false;
@@ -526,6 +538,12 @@ int main(int argc, char **argv) {
 		}
 #endif
 
+#if ENABLE_MIDI
+		case 22 /* --midi-advertisement */ :
+			config.midi.advertise = true;
+			break;
+#endif
+
 		case 16 /* --xapl-resp-name=NAME */ :
 			config.hfp.xapl_product_name = optarg;
 			break;
@@ -539,7 +557,7 @@ int main(int argc, char **argv) {
 	if (!(config.profile.a2dp_source || config.profile.a2dp_sink ||
 				config.profile.hfp_hf || config.profile.hfp_ag ||
 				config.profile.hsp_hs || config.profile.hsp_ag ||
-				config.profile.hfp_ofono)) {
+				config.profile.hfp_ofono || config.profile.midi)) {
 		error("It is required to enabled at least one BT profile");
 		fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
 		return EXIT_FAILURE;

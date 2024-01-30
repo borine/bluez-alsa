@@ -1,6 +1,6 @@
 /*
  * BlueALSA - bluez.c
- * Copyright (c) 2016-2023 Arkadiusz Bokowy
+ * Copyright (c) 2016-2024 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -41,6 +41,9 @@
 #include "bluealsa-config.h"
 #include "bluealsa-dbus.h"
 #include "bluez-iface.h"
+#if ENABLE_MIDI
+# include "bluez-midi.h"
+#endif
 #include "dbus.h"
 #include "hci.h"
 #include "sco.h"
@@ -84,6 +87,10 @@ struct bluez_adapter {
 	GDBusObjectManagerServer *manager_media_application;
 	/* manager for battery provider objects */
 	GDBusObjectManagerServer *manager_battery_provider;
+#if ENABLE_MIDI
+	/* manager for MIDI GATT objects */
+	GDBusObjectManagerServer *manager_midi_application;
+#endif
 	/* array of end-points for connected devices */
 	GHashTable *device_sep_map;
 };
@@ -91,6 +98,7 @@ struct bluez_adapter {
 static pthread_mutex_t bluez_mutex = PTHREAD_MUTEX_INITIALIZER;
 static GHashTable *dbus_object_data_map = NULL;
 static struct bluez_adapter bluez_adapters[HCI_MAX_DEV] = { 0 };
+static char bluez_dbus_unique_name[64] = "";
 
 static void bluez_register_a2dp_all(struct ba_adapter *);
 
@@ -98,13 +106,19 @@ static void bluez_register_media_application_finish(GObject *source,
 		GAsyncResult *result, void *userdata) {
 	(void)userdata;
 
+	GDBusMessage *rep;
 	GError *err = NULL;
-	GDBusMessage *rep = g_dbus_connection_send_message_with_reply_finish(
-			G_DBUS_CONNECTION(source), result, &err);
-	if (rep != NULL &&
-			g_dbus_message_get_message_type(rep) == G_DBUS_MESSAGE_TYPE_ERROR)
-		g_dbus_message_to_gerror(rep, &err);
 
+	if ((rep = g_dbus_connection_send_message_with_reply_finish(
+					G_DBUS_CONNECTION(source), result, &err)) == NULL ||
+			g_dbus_message_to_gerror(rep, &err))
+		goto fail;
+
+	/* Save sender (BlueZ) unique name for calls filtering. */
+	const char *sender = g_dbus_message_get_sender(rep);
+	strncpy(bluez_dbus_unique_name, sender, sizeof(bluez_dbus_unique_name) - 1);
+
+fail:
 	if (rep != NULL)
 		g_object_unref(rep);
 	if (err != NULL) {
@@ -146,12 +160,12 @@ static void bluez_register_battery_provider_finish(GObject *source,
 		GAsyncResult *result, void *userdata) {
 	(void)userdata;
 
+	GDBusMessage *rep;
 	GError *err = NULL;
-	GDBusMessage *rep = g_dbus_connection_send_message_with_reply_finish(
-			G_DBUS_CONNECTION(source), result, &err);
-	if (rep != NULL &&
-			g_dbus_message_get_message_type(rep) == G_DBUS_MESSAGE_TYPE_ERROR) {
-		g_dbus_message_to_gerror(rep, &err);
+
+	if ((rep = g_dbus_connection_send_message_with_reply_finish(
+					G_DBUS_CONNECTION(source), result, &err)) == NULL ||
+			g_dbus_message_to_gerror(rep, &err)) {
 		if (err->code == G_DBUS_ERROR_UNKNOWN_METHOD) {
 			/* Suppress warning message in case when BlueZ has no battery provider
 			 * support enabled, because it's not a mandatory feature. */
@@ -197,6 +211,21 @@ static void bluez_register_battery_provider(struct bluez_adapter *b_adapter) {
 
 }
 
+#if ENABLE_MIDI
+/**
+ * Register BLE MIDI application in BlueZ. */
+static void bluez_register_midi_application(struct bluez_adapter *b_adapter) {
+
+	char path[64];
+	struct ba_adapter *a = b_adapter->adapter;
+	snprintf(path, sizeof(path), "/org/bluez/%s/MIDI", a->hci.name);
+
+	GDBusObjectManagerServer *manager = bluez_midi_app_new(a, path);
+	b_adapter->manager_midi_application = manager;
+
+}
+#endif
+
 static struct bluez_adapter *bluez_adapter_new(struct ba_adapter *a) {
 
 	struct bluez_adapter *ba = &bluez_adapters[a->hci.dev_id];
@@ -214,6 +243,11 @@ static struct bluez_adapter *bluez_adapter_new(struct ba_adapter *a) {
 		bluez_register_a2dp_all(a);
 	}
 
+#if ENABLE_MIDI
+	if (config.profile.midi)
+		bluez_register_midi_application(ba);
+#endif
+
 	return ba;
 }
 
@@ -230,6 +264,12 @@ static void bluez_adapter_free(struct bluez_adapter *b_adapter) {
 		g_object_unref(b_adapter->manager_battery_provider);
 		b_adapter->manager_battery_provider = NULL;
 	}
+#if ENABLE_MIDI
+	if (b_adapter->manager_midi_application != NULL) {
+		g_object_unref(b_adapter->manager_midi_application);
+		b_adapter->manager_midi_application = NULL;
+	}
+#endif
 	g_hash_table_unref(b_adapter->device_sep_map);
 	b_adapter->device_sep_map = NULL;
 }
@@ -658,12 +698,16 @@ static void bluez_export_a2dp(
 
 	static const GDBusMethodCallDispatcher dispatchers[] = {
 		{ .method = "SelectConfiguration",
+			.sender = bluez_dbus_unique_name,
 			.handler = bluez_endpoint_select_configuration },
 		{ .method = "SetConfiguration",
+			.sender = bluez_dbus_unique_name,
 			.handler = bluez_endpoint_set_configuration },
 		{ .method = "ClearConfiguration",
+			.sender = bluez_dbus_unique_name,
 			.handler = bluez_endpoint_clear_configuration },
 		{ .method = "Release",
+			.sender = bluez_dbus_unique_name,
 			.handler = bluez_endpoint_release },
 		{ 0 },
 	};
@@ -983,7 +1027,7 @@ static int bluez_register_profile(
 		GError **error) {
 
 	GDBusMessage *msg = NULL, *rep = NULL;
-	int ret = 0;
+	int ret = -1;
 
 	debug("Registering hands-free profile: %s", dbus_obj->path);
 
@@ -1002,20 +1046,17 @@ static int bluez_register_profile(
 	g_variant_builder_clear(&options);
 
 	if ((rep = g_dbus_connection_send_message_with_reply_sync(config.dbus, msg,
-					G_DBUS_SEND_MESSAGE_FLAGS_NONE, -1, NULL, NULL, error)) == NULL)
+					G_DBUS_SEND_MESSAGE_FLAGS_NONE, -1, NULL, NULL, error)) == NULL ||
+			g_dbus_message_to_gerror(rep, error))
 		goto fail;
 
-	if (g_dbus_message_get_message_type(rep) == G_DBUS_MESSAGE_TYPE_ERROR) {
-		g_dbus_message_to_gerror(rep, error);
-		goto fail;
-	}
+	/* Save sender (BlueZ) unique name for calls filtering. */
+	const char *sender = g_dbus_message_get_sender(rep);
+	strncpy(bluez_dbus_unique_name, sender, sizeof(bluez_dbus_unique_name) - 1);
 
-	goto final;
+	ret = 0;
 
 fail:
-	ret = -1;
-
-final:
 	if (msg != NULL)
 		g_object_unref(msg);
 	if (rep != NULL)
@@ -1034,10 +1075,13 @@ static void bluez_register_hfp(
 
 	static const GDBusMethodCallDispatcher dispatchers[] = {
 		{ .method = "NewConnection",
+			.sender = bluez_dbus_unique_name,
 			.handler = bluez_profile_new_connection },
 		{ .method = "RequestDisconnection",
+			.sender = bluez_dbus_unique_name,
 			.handler = bluez_profile_request_disconnection },
 		{ .method = "Release",
+			.sender = bluez_dbus_unique_name,
 			.handler = bluez_profile_release },
 		{ 0 },
 	};
@@ -1212,7 +1256,6 @@ static void bluez_register(void) {
 				if (uuids[ii].enabled && !uuids[ii].global && adapters_profiles[i] & uuids[ii].profile)
 					warn("UUID already registered in BlueZ [%s]: %s", a->hci.name, uuids[ii].uuid);
 
-			/* register media endpoints */
 			bluez_adapter_new(a);
 
 		}
@@ -1655,13 +1698,9 @@ bool bluez_a2dp_set_configuration(
 	pthread_mutex_unlock(&bluez_mutex);
 
 	if ((rep = g_dbus_connection_send_message_with_reply_sync(config.dbus, msg,
-					G_DBUS_SEND_MESSAGE_FLAGS_NONE, -1, NULL, NULL, error)) == NULL)
+					G_DBUS_SEND_MESSAGE_FLAGS_NONE, -1, NULL, NULL, error)) == NULL ||
+			g_dbus_message_to_gerror(rep, error))
 		goto fail;
-
-	if (g_dbus_message_get_message_type(rep) == G_DBUS_MESSAGE_TYPE_ERROR) {
-		g_dbus_message_to_gerror(rep, error);
-		goto fail;
-	}
 
 	rv = true;
 

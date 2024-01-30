@@ -37,9 +37,8 @@
 #include "bluealsa-dbus.h"
 #include "bluez.h"
 #include "hfp.h"
-#if ENABLE_OFONO
-# include "ofono.h"
-#endif
+#include "midi.h"
+#include "ofono.h"
 #include "storage.h"
 #include "shared/a2dp-codecs.h"
 #include "shared/log.h"
@@ -50,6 +49,10 @@
 
 int a2dp_transport_init(struct ba_transport *t) { (void)t; return 0; }
 int a2dp_transport_start(struct ba_transport *t) { (void)t; return 0; }
+int midi_transport_alsa_seq_create(struct ba_transport *t) { (void)t; return 0; }
+int midi_transport_alsa_seq_delete(struct ba_transport *t) { (void)t; return 0; }
+int midi_transport_start(struct ba_transport *t) { (void)t; return 0; }
+int midi_transport_stop(struct ba_transport *t) { (void)t; return 0; }
 void *sco_enc_thread(struct ba_transport_pcm *t_pcm);
 
 void *ba_rfcomm_thread(struct ba_transport *t) { (void)t; return 0; }
@@ -147,6 +150,32 @@ CK_START_TEST(test_ba_transport) {
 	ck_assert_ptr_eq(ba_adapter_lookup(0), NULL);
 
 } CK_END_TEST
+
+#if ENABLE_MIDI
+CK_START_TEST(test_ba_transport_midi) {
+
+	struct ba_adapter *a;
+	struct ba_device *d;
+	struct ba_transport *t;
+	bdaddr_t addr = { 0 };
+
+	ck_assert_ptr_ne(a = ba_adapter_new(0), NULL);
+	ck_assert_ptr_ne(d = ba_device_new(a, &addr), NULL);
+
+	t = ba_transport_new_midi(d, BA_TRANSPORT_PROFILE_MIDI, "/owner", "/path");
+	ck_assert_ptr_ne(t, NULL);
+
+	ba_adapter_unref(a);
+	ba_device_unref(d);
+
+	ck_assert_int_eq(ba_transport_acquire(t), 0);
+	ck_assert_int_eq(ba_transport_release(t), 0);
+
+	ba_transport_destroy(t);
+	ck_assert_ptr_eq(ba_adapter_lookup(0), NULL);
+
+} CK_END_TEST
+#endif
 
 CK_START_TEST(test_ba_transport_sco_one_only) {
 
@@ -429,6 +458,9 @@ int main(void) {
 	tcase_add_test(tc, test_ba_adapter);
 	tcase_add_test(tc, test_ba_device);
 	tcase_add_test(tc, test_ba_transport);
+#if ENABLE_MIDI
+	tcase_add_test(tc, test_ba_transport_midi);
+#endif
 	tcase_add_test(tc, test_ba_transport_sco_one_only);
 	tcase_add_test(tc, test_ba_transport_sco_default_codec);
 	tcase_add_test(tc, test_ba_transport_threads_sync_termination);

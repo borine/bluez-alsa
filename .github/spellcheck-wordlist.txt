@@ -3,6 +3,7 @@ AAC
 ABR
 ADDR
 AVRCP
+BLE
 BT
 CBR
 CLI
@@ -174,6 +175,7 @@ dpsnk
 dpsrc
 DYN
 EAGAIN
+EDE
 EINTR
 EINVAL
 ENODEV
@@ -198,11 +200,14 @@ hfpag
 hfphf
 hspag
 hsphs
+HUP
 ioplug
 IPHONEACCEV
 jas
 keyp
 larc
+LEAdvertisement
+LEAdvertisingManager
 LF
 LFE
 libasound

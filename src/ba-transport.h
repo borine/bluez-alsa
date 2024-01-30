@@ -22,9 +22,13 @@
 #include <stdint.h>
 #include <time.h>
 
+#include <alsa/asoundlib.h>
+#include <glib.h>
+
 #include "a2dp.h"
 #include "ba-device.h"
 #include "ba-transport-pcm.h"
+#include "ble-midi.h"
 #include "bluez.h"
 #include "shared/a2dp-codecs.h"
 
@@ -42,6 +46,9 @@ enum ba_transport_profile {
 	BA_TRANSPORT_PROFILE_HFP_AG      = (2 << 2),
 	BA_TRANSPORT_PROFILE_HSP_HS      = (1 << 4),
 	BA_TRANSPORT_PROFILE_HSP_AG      = (2 << 4),
+#if ENABLE_MIDI
+	BA_TRANSPORT_PROFILE_MIDI        = (1 << 6),
+#endif
 };
 
 #define BA_TRANSPORT_PROFILE_MASK_A2DP \
@@ -166,6 +173,35 @@ struct ba_transport {
 
 		} sco;
 
+#if ENABLE_MIDI
+		struct {
+
+			/* ALSA sequencer. */
+			snd_seq_t *seq;
+			/* Associated sequencer port. */
+			int seq_port;
+
+			/* ALSA MIDI event parser. */
+			snd_midi_event_t *seq_parser;
+
+			/* BLE-MIDI input link */
+			int ble_fd_write;
+			/* BLE-MIDI output (notification) link */
+			int ble_fd_notify;
+
+			/* BLE-MIDI parser for the incoming data. */
+			struct ble_midi_dec ble_decoder;
+			/* BLE-MIDI parser for the outgoing data. */
+			struct ble_midi_enc ble_encoder;
+
+			/* Watch associated with the BLE-MIDI link. */
+			GSource *watch_ble;
+			/* Watch associated with ALSA sequencer. */
+			GSource *watch_seq;
+
+		} midi;
+#endif
+
 	};
 
 	/* callback functions for self-management */
@@ -190,6 +226,13 @@ struct ba_transport *ba_transport_new_sco(
 		const char *dbus_owner,
 		const char *dbus_path,
 		int rfcomm_fd);
+#if ENABLE_MIDI
+struct ba_transport *ba_transport_new_midi(
+		struct ba_device *device,
+		enum ba_transport_profile profile,
+		const char *dbus_owner,
+		const char *dbus_path);
+#endif
 
 #if DEBUG
 const char *ba_transport_debug_name(

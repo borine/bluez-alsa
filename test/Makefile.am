@@ -1,5 +1,5 @@
 # BlueALSA - Makefile.am
-# Copyright (c) 2016-2023 Arkadiusz Bokowy
+# Copyright (c) 2016-2024 Arkadiusz Bokowy
 
 SUBDIRS = mock
 
@@ -29,11 +29,6 @@ check_PROGRAMS = \
 	test-rtp \
 	test-utils
 
-if ENABLE_MSBC
-TESTS += test-msbc
-check_PROGRAMS += test-msbc
-endif
-
 if ENABLE_APLAY
 TESTS += test-utils-aplay
 check_PROGRAMS += test-utils-aplay
@@ -42,6 +37,16 @@ endif
 if ENABLE_CLI
 TESTS += test-utils-cli
 check_PROGRAMS += test-utils-cli
+endif
+
+if ENABLE_MIDI
+TESTS += test-alsa-midi test-ble-midi
+check_PROGRAMS += test-alsa-midi test-ble-midi
+endif
+
+if ENABLE_MSBC
+TESTS += test-msbc
+check_PROGRAMS += test-msbc
 endif
 
 check_LTLIBRARIES = \
@@ -69,6 +74,10 @@ test_a2dp_SOURCES = \
 test_alsa_ctl_SOURCES = \
 	../src/shared/log.c \
 	test-alsa-ctl.c
+
+test_alsa_midi_SOURCES = \
+	../src/shared/log.c \
+	test-alsa-midi.c
 
 test_alsa_pcm_SOURCES = \
 	../src/shared/log.c \
@@ -132,6 +141,13 @@ test_io_SOURCES = \
 	../src/sco.c \
 	../src/utils.c \
 	test-io.c
+
+if ENABLE_MIDI
+test_ble_midi_SOURCES = \
+	../src/shared/log.c \
+	../src/ble-midi.c \
+	test-ble-midi.c
+endif
 
 if ENABLE_MSBC
 test_msbc_SOURCES = \

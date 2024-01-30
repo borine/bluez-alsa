@@ -18,7 +18,7 @@ jobs:
         - --enable-debug
         - --enable-debug --enable-aac --enable-msbc
         - --enable-debug --enable-mp3lame --enable-mpg123
-        - --enable-faststream --enable-mp3lame
+        - --enable-faststream --enable-midi --enable-mp3lame
         - --enable-aplay --enable-ofono --enable-upower
         - --enable-cli --enable-rfcomm --enable-manpages
         - --enable-aptx --enable-aptx-hd --with-libopenaptx
@@ -69,7 +69,7 @@ jobs:
   sanitize-prepare:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/cache@v3
+    - uses: actions/cache@v4
       id: cache
       with:
         key: sanitize-env
@@ -139,6 +139,7 @@ jobs:
           --enable-aptx-hd \
           --with-libopenaptx \
           --enable-faststream \
+          --enable-midi \
           --enable-mp3lame \
           --enable-mpg123 \
           --enable-msbc \
@@ -153,7 +154,7 @@ jobs:
         make clean
         SANITIZERS=$(for x in ${{ matrix.sanitize }}; do echo -n " -fsanitize=$x"; done)
         make check CFLAGS="-g -O2 $SANITIZERS -fno-sanitize-recover=all" TESTS=
-    - uses: actions/cache/restore@v3
+    - uses: actions/cache/restore@v4
       if: ${{ matrix.sanitize == 'thread' }}
       with:
         key: sanitize-env

@@ -34,7 +34,7 @@ ALSA, with only one application at a time using each Bluetooth audio stream.
 In such systems BlueALSA adds Bluetooth audio support to the existing
 ALSA sound card support. Note this means that the applications are constrained
 by the capabilities of the ALSA API, and the higher-level audio processing
-features of audio servers such as PulseAudio and Pipewire are not available.
+features of audio servers such as PulseAudio and PipeWire are not available.
 
 BlueALSA consists of the daemon `bluealsa`, ALSA plug-ins, and a number of
 utilities. The basic context is shown in this diagram:
@@ -55,8 +55,11 @@ C <--> G((bluealsa-cli))
 F <--> H([ALSA libasound])
 H <--> I((ALSA\napplications))
 C <--> J((other\nD-Bus clients))
+C <--> L((ALSA MIDI\nsequencer))
+L <--> M([ALSA libasound])
+M <--> N((ALSA MIDI\napplication))
 
-class A,B,E,H,I,J,K external;
+class A,B,E,H,I,J,K,L,M,N external;
 class C,D,F,G bluealsa;
 ```
 
@@ -69,6 +72,10 @@ BlueALSA includes ALSA plug-ins which hide all the D-Bus specifics and permit
 applications to use the ALSA PCM and mixer interfaces, so that existing ALSA
 applications can access Bluetooth audio devices in the same way as they use
 sound card PCMs and mixers.
+
+In case of BLE MIDI, the daemon creates a simple MIDI port directly in ALSA
+MIDI sequencer, so that ALSA MIDI application can connect to the remote BLE
+MIDI device in the same way as it would connect to a local MIDI device.
 
 BlueALSA also includes a number of utility applications. Of particular note
 are:
@@ -239,7 +246,7 @@ If reporting a problem as a new issue, please use the appropriate
 [bluez-alsa GitHub issue reporting template][] and complete each section of
 the template as fully as possible.
 
-[TROUBLESHOOTING]: ./TROUBLESHOOTING.md
+[TROUBLESHOOTING]: TROUBLESHOOTING.md
 [manual pages]: doc/
 [previous issues]: https://github.com/arkq/bluez-alsa/issues
 [wiki]: https://github.com/arkq/bluez-alsa/wiki
@@ -253,7 +260,8 @@ file](LICENSE) for details.
 ## Resources
 
 1. [Bluetooth Adopted Specifications](https://www.bluetooth.com/specifications/adopted-specifications)
-2. [Bluetooth Design Guidelines](https://developer.apple.com/hardwaredrivers/BluetoothDesignGuidelines.pdf)
-3. [RTP Payload Format for MPEG-4](https://tools.ietf.org/html/rfc6416)
-4. [Coding of MPEG-4 Audio](https://www.iso.org/standard/42739.html)
-5. [ALSA project library reference](https://www.alsa-project.org/alsa-doc/alsa-lib/index.html)
+1. [Bluetooth LE MIDI Specification](https://www.midi.org/specifications-old/item/bluetooth-le-midi)
+1. [Bluetooth Design Guidelines](https://developer.apple.com/hardwaredrivers/BluetoothDesignGuidelines.pdf)
+1. [RTP Payload Format for MPEG-4](https://tools.ietf.org/html/rfc6416)
+1. [Coding of MPEG-4 Audio](https://www.iso.org/standard/42739.html)
+1. [ALSA project library reference](https://www.alsa-project.org/alsa-doc/alsa-lib/index.html)
