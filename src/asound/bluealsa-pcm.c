@@ -113,7 +113,7 @@ struct bluealsa_pcm {
 	/* delay accumulated just before pausing */
 	snd_pcm_sframes_t delay_paused;
 	/* maximum delay in FIFO */
-	snd_pcm_sframes_t delay_fifo_size;
+	snd_pcm_uframes_t delay_fifo_size;
 	/* user provided extra delay component */
 	snd_pcm_sframes_t delay_ex;
 
@@ -123,6 +123,9 @@ struct bluealsa_pcm {
 
 	/* /dev/null used by capture PCMs to clear stale data from FIFO. */
 	int null_fd;
+
+	/* Indicates whether capture stream is delivering samples. */
+	bool fifo_active;
 };
 
 /**
@@ -212,7 +215,7 @@ static void frames_to_timespec(struct timespec *ts, snd_pcm_uframes_t frames, un
 	ts->tv_nsec = 1000000000L / rate * (frames % rate);
 }
 
-static void insert_silence(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, snd_pcm_uframes_t frames, int format, int channels) {
+static void capture_silence(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, snd_pcm_uframes_t frames) {
 
 	char *buf = pcm->io_hw_buffer + offset * pcm->frame_size;
 
@@ -220,11 +223,11 @@ static void insert_silence(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, s
 	const snd_pcm_uframes_t avail = pcm->io.buffer_size - offset;
 	snd_pcm_uframes_t chunk = avail < frames ? avail : frames;
 
-	snd_pcm_format_set_silence(format, buf, chunk * channels);
+	snd_pcm_format_set_silence(pcm->io.format, buf, chunk * pcm->io.channels);
 	if (chunk < frames) {
 		buf = pcm->io_hw_buffer;
 		chunk = frames - chunk;
-		snd_pcm_format_set_silence(format, buf, chunk * channels);
+		snd_pcm_format_set_silence(pcm->io.format, buf, chunk * pcm->io.channels);
 	}
 }
 
@@ -235,7 +238,7 @@ static void insert_silence(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, s
  * Regulates the average rate at which frames are transferred, and inserts
  * intervals of silence into the stream if necessary to maintain the rate.
  * @return true if transfer completed successfully, false if error occurred. */
-static bool io_thread_read(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, snd_pcm_uframes_t frames, struct asrsync *asrs, int *fifo_active) {
+static bool io_thread_read(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, snd_pcm_uframes_t frames, struct asrsync *asrs) {
 	/* count of frames added to buffer in this call */
 	snd_pcm_uframes_t tframes = 0;
 	struct timespec deadline, now, temp, timeout;
@@ -268,28 +271,31 @@ static bool io_thread_read(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, s
 			break;
 		}
 		else if (pollret == 0) {
-			if (*fifo_active != 0) {
-				*fifo_active = 0;
+			if (pcm->fifo_active) {
+				pcm->fifo_active = false;
 				debug2("Stream inactive, inserting silence");
 			}
-			insert_silence(pcm, offset, frames - tframes, pcm->io.format, pcm->io.channels);
+			capture_silence(pcm, offset, frames - tframes);
 			tframes = frames;
 			break;
 		}
 		else if (pfd.revents & POLLIN) {
 			gettimestamp(&now);
-			if (*fifo_active < 1) {
+			if (!pcm->fifo_active) {
 				/* If transfers begin too soon the FIFO may be emptied again
 				 * immediately. So we wait until there is a least one full
 				 * period available. */
-				unsigned int nread = 0;
+				snd_pcm_uframes_t avail;
+				unsigned int nread;
 				ioctl(pcm->ba_pcm_fd, FIONREAD, &nread);
-				if (nread < MIN(pcm->io.period_size * pcm->frame_size, pcm->delay_fifo_size)) {
-					insert_silence(pcm, offset, frames - tframes, pcm->io.format, pcm->io.channels);
+				avail = nread / pcm->frame_size;
+				const size_t threshold = MIN((pcm->delay_fifo_size * pcm->frame_size), frames * 3/2);
+				if (avail < threshold) {
+					capture_silence(pcm, offset, frames);
 					tframes = frames;
 					break;
 				}
-				*fifo_active = 1;
+				pcm->fifo_active = true;
 				debug2("Stream active");
 			}
 			/* Allow for fragmented period at end of buffer */
@@ -308,23 +314,23 @@ static bool io_thread_read(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, s
 			if (ret == 0) {
 				break;
 			}
-			tframes += ret / pcm->frame_size;
-			offset += ret / pcm->frame_size;
+			chunk = ret / pcm->frame_size;
+			tframes += chunk;
+			offset += chunk;
 			if (offset >= pcm->io.buffer_size)
 				offset = 0;
 
-			timespecsub(&deadline, &now, &timeout);
-			if (timeout.tv_sec < 0)
+			if (difftimespec(&deadline, &now, &timeout) < 0) {
 				timeout.tv_sec = 0;
-			if (timeout.tv_nsec < 0)
 				timeout.tv_nsec = 0;
+			}
 
 		}
 		else {
 			/* FIFO closed, flush any remaining frames */
 			if (tframes > 0) {
 				if (tframes < frames) {
-					insert_silence(pcm, offset, frames - tframes, pcm->io.format, pcm->io.channels);
+					capture_silence(pcm, offset, frames - tframes);
 					tframes = frames;
 				}
 			}
@@ -396,10 +402,6 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 		SNDERR("Thread signal mask error: %s", strerror(errno));
 		goto fail;
 	}
-
-	/* Indicates whether capture stream is delivering samples.
-	 * -1: unknown, 0: inactive, 1: active */
-	int fifo_active = -1;
 
 	/* We update pcm->io_hw_ptr (i.e. the value seen by ioplug) only when
 	 * a period has been completed. We use a temporary copy during the
@@ -475,7 +477,7 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 		if (io->stream == SND_PCM_STREAM_CAPTURE) {
 			/* Read the whole period "atomically". This will assure, that frames
 			 * are not fragmented, so the pointer can be correctly updated. */
-			if (!io_thread_read(pcm, offset, frames, &asrs, &fifo_active))
+			if (!io_thread_read(pcm, offset, frames, &asrs))
 				goto fail;
 		}
 		else {
@@ -753,9 +755,9 @@ static int bluealsa_hw_params(snd_pcm_ioplug_t *io, snd_pcm_hw_params_t *params)
 		 * it is possible to modify the size of this buffer we will set is to some
 		 * low value, but big enough to prevent audio tearing. Note, that the size
 		 * will be rounded up to the page size (typically 4096 bytes). */
-		pcm->delay_fifo_size = fcntl(pcm->ba_pcm_fd, F_SETPIPE_SZ, 2048) / pcm->frame_size;
+		pcm->delay_fifo_size = (unsigned)fcntl(pcm->ba_pcm_fd, F_SETPIPE_SZ, 2048) / pcm->frame_size;
 	else
-		pcm->delay_fifo_size = fcntl(pcm->ba_pcm_fd, F_GETPIPE_SZ)  / pcm->frame_size;
+		pcm->delay_fifo_size = (unsigned)fcntl(pcm->ba_pcm_fd, F_GETPIPE_SZ)  / pcm->frame_size;
 
 	debug2("FIFO buffer size: %zd frames", pcm->delay_fifo_size);
 
@@ -1655,6 +1657,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 	pthread_mutex_init(&pcm->mutex, NULL);
 	pthread_cond_init(&pcm->pause_cond, NULL);
 	pcm->pause_state = BA_PAUSE_STATE_RUNNING;
+	pcm->fifo_active = true;
 
 	dbus_threads_init_default();
 
