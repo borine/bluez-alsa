@@ -1,5 +1,23 @@
 # Bluetooth Audio ALSA Backend
 
+> [!IMPORTANT]
+> This repository contains experimental code testing ideas for enhancements to
+BlueALSA. The code is not fully tested and not yet ready for submitting
+upstream. None of the branches are stable, and may be force-pushed at any time.
+>
+> At present, the proposed enhancements collected together in the `main` branch
+are:
+>
+> 1. Support for multiple programs to connect to the same BlueALSA PCM
+simultaneously, with mixing of the streams for playback and duplication of the
+streams for capture. Must be enabled at run time with
+``bluealsa --multi-client``.
+>
+> 2. Support for additional ALSA PCM software parameters:
+>     * period_event
+>     * stop threshold
+>     * silence_size / silence_threshold
+
 [![Build Status](https://github.com/arkq/bluez-alsa/actions/workflows/build-and-test.yaml/badge.svg)](https://github.com/arkq/bluez-alsa/actions/workflows/build-and-test.yaml)
 [![Code Coverage](https://codecov.io/gh/arkq/bluez-alsa/branch/master/graph/badge.svg)](https://app.codecov.io/gh/arkq/bluez-alsa)
 
