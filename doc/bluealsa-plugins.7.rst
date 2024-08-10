@@ -108,7 +108,7 @@ PCM Parameters
     Modifies the behaviour of the plugin on ``a2dp-sink``, ``hfp-hf`` and
     ``hsp-hs`` nodes in order to align better with the behaviour of the ALSA
     ``hw`` plugin. This is a string option which takes the values **"none"**,
-    or **"busy"**.
+    **"busy"** or **silence**.
     See `Transport acquisition`_ in the **NOTES** section below for more
     information.
 
@@ -137,7 +137,7 @@ own configuration (e.g. in ~/.asoundrc.conf) for example:
   defaults.bluealsa.codec "cvsd"
   defaults.bluealsa.volume "50+"
   defaults.bluealsa.softvol off
-  defaults.bluealsa.hwcompat "busy"
+  defaults.bluealsa.hwcompat "silence"
   defaults.bluealsa.delay 5000
   defaults.bluealsa.service "org.bluealsa.source"
 
@@ -187,7 +187,7 @@ configuration node has the following fields:
     [codec STR]       # Preferred codec
     [volume STR]      # Initial volume for this PCM
     [softvol BOOLEAN] # Enable/disable BlueALSA's software volume
-    [hwcompat STR]    # HW compatibility mode (none or busy)
+    [hwcompat STR]    # HW compatibility mode (none, busy or silence)
     [delay INT]       # Extra delay (frames) to be reported (default 0)
     [service STR]     # DBus name of service (default org.bluealsa)
   }
@@ -569,9 +569,9 @@ only the HFP-AG node can change the HFP codec.
 Transport acquisition
 ---------------------
 
-The audio connection of a profile is not established immediately that a device
-connects. The A2DP source device, or HFP/HSP gateway device, must first
-"acquire" the profile transport.
+The audio connection of a Bluetooth profile is not established immediately that
+a device connects. The A2DP source device, or HFP/HSP gateway device, must
+first "acquire" the profile transport.
 
 When the BlueALSA PCM plugin is used on a source A2DP or gateway HFP/HSP node,
 then **bluealsad(8)** will automatically acquire the transport and begin audio
@@ -602,8 +602,14 @@ takes the following values:
     Causes snd_pcm_open() to return immediately with error code **-EBUSY**
     ("Device or resource busy") on A2DP sink, HFP-HF and HSP-HS nodes if the
     transport is not yet acquired. With this option the plugin also stops the
-    PCM stream and enters the **SND_PCM_STATE_DISCONNECTED** state if the remote
-    device releases the transport while in use.
+    PCM stream and enters the **SND_PCM_STATE_DISCONNECTED** state if the
+    remote device releases the transport while in use.
+
+- "silence"
+
+    Inserts silence for capture streams, or simply drops frames for playback
+    streams, whenever the transport is not acquired, thus maintaining a
+    continuous stream as far as the application is concerned.
 
 PCM drain and non-blocking operation
 ------------------------------------

@@ -113,6 +113,7 @@ renderer
 scalable
 signedness
 stdin
+sys
 syslog
 tmp
 tty
