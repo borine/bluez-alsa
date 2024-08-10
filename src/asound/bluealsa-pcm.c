@@ -105,18 +105,15 @@ struct bluealsa_pcm {
 	/* ALSA operates on frames, we on bytes */
 	size_t frame_size;
 
+	/* maximum frames in FIFO */
+	snd_pcm_sframes_t fifo_size;
+
 	struct timespec delay_ts;
 	snd_pcm_uframes_t delay_hw_ptr;
 	unsigned int delay_pcm_nread;
-	/* In the capture mode, delay_running indicates that frames are being
-	 * transferred to the FIFO by the server. In playback mode it indicates
-	 * that the IO thread is transferring frames to the FIFO. */
-	bool delay_running;
 
 	/* delay accumulated just before pausing */
 	snd_pcm_sframes_t delay_paused;
-	/* maximum delay in FIFO */
-	snd_pcm_sframes_t delay_fifo_size;
 	/* user provided extra delay component */
 	snd_pcm_sframes_t delay_ex;
 
@@ -124,6 +121,8 @@ struct bluealsa_pcm {
 	pthread_cond_t pause_cond;
 	unsigned int pause_state;
 
+	/* /dev/null is used to clear stale data from the PCM FIFO. */
+	int null_fd;
 };
 
 /**
@@ -188,19 +187,18 @@ static void io_thread_update_delay(struct bluealsa_pcm *pcm,
 	/* stash current time and levels */
 	pcm->delay_ts = now;
 	pcm->delay_pcm_nread = nread;
-	if (hw_ptr == -1) {
+	if (hw_ptr == -1)
 		pcm->delay_hw_ptr = 0;
-		if (pcm->io.stream == SND_PCM_STREAM_PLAYBACK)
-			pcm->delay_running = false;
-	}
-	else {
+	else
 		pcm->delay_hw_ptr = hw_ptr;
-		if (pcm->io.stream == SND_PCM_STREAM_PLAYBACK)
-			pcm->delay_running = true;
-	}
 
 	pthread_mutex_unlock(&pcm->mutex);
+}
 
+/**
+ * Helper function empties the PCM FIFO. */
+static void clear_pcm_fifo(struct bluealsa_pcm *pcm) {
+	splice(pcm->ba_pcm_fd, NULL, pcm->null_fd, NULL, pcm->fifo_size * pcm->frame_size, SPLICE_F_NONBLOCK);
 }
 
 /**
@@ -323,12 +321,11 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 					head += ret;
 					len -= ret;
 				}
-
 				if (ret == 0) {
+					debug2("BlueALSA server closed PCM connection");
 					pcm->connected = false;
 					goto fail;
 				}
-
 			}
 			else {
 
@@ -404,11 +401,8 @@ static int bluealsa_start(snd_pcm_ioplug_t *io) {
 		return -EIO;
 	}
 
-	/* Initialize delay calculation - capture reception begins immediately,
-	 * playback transmission begins only when first period has been written
-	 * by the application. */
-	pcm->delay_running = io->stream == SND_PCM_STREAM_CAPTURE ? true : false;
-	gettimestamp(&pcm->delay_ts);
+	/* Initialize delay calculation. */
+	io_thread_update_delay(pcm, -1);
 
 	/* start the IO thread */
 	pcm->io_started = true;
@@ -429,7 +423,6 @@ static int bluealsa_stop(snd_pcm_ioplug_t *io) {
 
 	io_thread_cancel(pcm);
 
-	pcm->delay_running = false;
 	pcm->delay_pcm_nread = 0;
 
 	/* Bug in ioplug - if pcm->io_hw_ptr == -1 then it reports state
@@ -442,7 +435,8 @@ static int bluealsa_stop(snd_pcm_ioplug_t *io) {
 
 	/* Applications that call poll() after snd_pcm_drain() will be blocked
 	 * forever unless we generate a poll() event here. */
-	eventfd_write(pcm->event_fd, 1);
+	if (io->stream == SND_PCM_STREAM_PLAYBACK)
+		eventfd_write(pcm->event_fd, 1);
 
 	return 0;
 }
@@ -479,6 +473,8 @@ static int bluealsa_close(snd_pcm_ioplug_t *io) {
 		close(pcm->event_fd);
 	pthread_mutex_destroy(&pcm->mutex);
 	pthread_cond_destroy(&pcm->pause_cond);
+	if (pcm->null_fd != -1)
+		close(pcm->null_fd);
 	free(pcm);
 	return 0;
 }
@@ -641,11 +637,11 @@ static int bluealsa_hw_params(snd_pcm_ioplug_t *io, snd_pcm_hw_params_t *params)
 		 * it is possible to modify the size of this buffer we will set is to some
 		 * low value, but big enough to prevent audio tearing. Note, that the size
 		 * will be rounded up to the page size (typically 4096 bytes). */
-		pcm->delay_fifo_size = fcntl(pcm->ba_pcm_fd, F_SETPIPE_SZ, 2048) / pcm->frame_size;
+		pcm->fifo_size = fcntl(pcm->ba_pcm_fd, F_SETPIPE_SZ, 2048) / pcm->frame_size;
 	else
-		pcm->delay_fifo_size = fcntl(pcm->ba_pcm_fd, F_GETPIPE_SZ)  / pcm->frame_size;
+		pcm->fifo_size = fcntl(pcm->ba_pcm_fd, F_GETPIPE_SZ)  / pcm->frame_size;
 
-	debug2("FIFO buffer size: %zd frames", pcm->delay_fifo_size);
+	debug2("FIFO buffer size: %zd frames", pcm->fifo_size);
 
 	/* ALSA default for avail min is one period. */
 	pcm->io_avail_min = period_size;
@@ -729,6 +725,15 @@ static int bluealsa_prepare(snd_pcm_ioplug_t *io) {
 		 * preparing after an overrun). */
 			eventfd_t event;
 			eventfd_read(pcm->event_fd, &event);
+
+		/* The bluealsa server begins sending audio frames as soon as the
+		* transport is acquired, it does not wait for the Resume command. To
+		* achieve the expected ALSA device behavior we therefore have to pause
+		* the server, and discard any frames already sent. */
+		if (!pcm->io_started) {
+			ba_dbus_pcm_ctrl_send_pause(pcm->ba_pcm_ctrl_fd, NULL);
+			clear_pcm_fifo(pcm);
+		}
 	}
 
 	debug2("Prepared");
@@ -872,7 +877,7 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 	pthread_mutex_lock(&pcm->mutex);
 
 	/* if PCM is not started there should be no capture delay */
-	if (!pcm->delay_running && io->stream == SND_PCM_STREAM_CAPTURE) {
+	if (io->stream == SND_PCM_STREAM_CAPTURE && io->state != SND_PCM_STATE_RUNNING) {
 		pthread_mutex_unlock(&pcm->mutex);
 		return 0;
 	}
@@ -894,11 +899,10 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 		delay = fifo_delay + tframes;
 
 		/* Adjust by the change in frames in the buffer. */
-		if (io->state != SND_PCM_STATE_XRUN)
-			delay += io->buffer_size - snd_pcm_ioplug_hw_avail(io, pcm->delay_hw_ptr, io->appl_ptr);
+		delay += io->buffer_size - snd_pcm_ioplug_hw_avail(io, pcm->delay_hw_ptr, io->appl_ptr);
 
 		/* impose upper limit */
-		snd_pcm_sframes_t limit = pcm->delay_fifo_size + io->buffer_size;
+		snd_pcm_sframes_t limit = pcm->fifo_size + io->buffer_size;
 		if (delay > limit)
 			delay = limit;
 
@@ -910,13 +914,11 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 		/* The buffer_delay is the number of frames that were in the buffer at
 		 * pcm->delay_ts, adjusted the number written by the application since
 		 * then. */
-		snd_pcm_sframes_t buffer_delay = 0;
-		if (io->state != SND_PCM_STATE_XRUN)
-			buffer_delay = snd_pcm_ioplug_hw_avail(io, pcm->delay_hw_ptr, io->appl_ptr);
+		snd_pcm_sframes_t buffer_delay = snd_pcm_ioplug_hw_avail(io, pcm->delay_hw_ptr, io->appl_ptr);
 
 		/* If the PCM is running, then some frames from the buffer may have been
 		 * consumed, so we add them before adjusting for time elapsed. */
-		if (pcm->delay_running)
+		if (io->state == SND_PCM_STATE_RUNNING)
 			delay += buffer_delay;
 
 		/* Adjust the total delay by the number of frames consumed. */
@@ -926,7 +928,7 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 		/* If the PCM is not running, then the frames in the buffer will not have
 		 * been consumed since pcm->delay_ts, so we add them after the time
 		 * elapsed adjustment. */
-		if (!pcm->delay_running)
+		if (io->state != SND_PCM_STATE_RUNNING)
 			delay += buffer_delay;
 	}
 
@@ -1615,6 +1617,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 	pthread_mutex_init(&pcm->mutex, NULL);
 	pthread_cond_init(&pcm->pause_cond, NULL);
 	pcm->pause_state = BA_PAUSE_STATE_RUNNING;
+	pcm->null_fd = -1;
 
 	dbus_threads_init_default();
 
@@ -1684,6 +1687,12 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 		ret = -EAGAIN;
 		goto fail;
 	}
+
+	if (stream == SND_PCM_STREAM_CAPTURE)
+		if ((pcm->null_fd = open("/dev/null", O_WRONLY | O_NONBLOCK)) == -1) {
+			SNDERR("Couldn't open /dev/null: %s", strerror(errno));
+			goto fail;
+		}
 
 #if SND_LIB_VERSION >= 0x010102 && SND_LIB_VERSION <= 0x010103
 	/* ALSA library thread-safe API functionality does not play well with ALSA
