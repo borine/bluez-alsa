@@ -286,7 +286,7 @@ static bool io_thread_read_hwcompat(struct bluealsa_pcm *pcm, snd_pcm_uframes_t 
 				unsigned int nread;
 				ioctl(pcm->ba_pcm_fd, FIONREAD, &nread);
 				avail = nread / pcm->frame_size;
-				if ((avail < (2 * pcm->io.period_size / 3)) && (pcm->io.period_size < pcm->fifo_size)) {
+				if ((avail < (3 * pcm->io.period_size / 2)) && (pcm->io.period_size < pcm->fifo_size)) {
 					if (frames <= pcm->fifo_size - avail) {
 						/* Leave all the frames in the FIFO until the next
 						 * read. */
