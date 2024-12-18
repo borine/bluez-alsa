@@ -1100,6 +1100,13 @@ static int bluealsa_drain(snd_pcm_ioplug_t *io) {
 static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 	struct bluealsa_pcm *pcm = io->private_data;
 
+	 /* The Bluetooth audio profiles do not report delay from the source
+	  * to the sink, so it is impossible to report the true delay. Instead, to
+	  * keep applications such as `alsaloop` happy, we report the filled frames
+	  * currently in the ring buffer. */
+	if (io->stream == SND_PCM_STREAM_CAPTURE)
+		return snd_pcm_ioplug_avail(io, io->hw_ptr, io->appl_ptr);
+
 	snd_pcm_sframes_t delay = 0;
 
 	struct timespec now;
@@ -1122,12 +1129,6 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 
 	pthread_mutex_lock(&pcm->mutex);
 
-	/* if PCM is not started there should be no capture delay */
-	if (io->stream == SND_PCM_STREAM_CAPTURE && io->state != SND_PCM_STATE_RUNNING) {
-		pthread_mutex_unlock(&pcm->mutex);
-		return 0;
-	}
-
 	struct timespec diff;
 	timespecsub(&now, &pcm->delay_ts, &diff);
 
@@ -1138,45 +1139,27 @@ static snd_pcm_sframes_t bluealsa_calculate_delay(snd_pcm_ioplug_t *io) {
 
 	/* the number of frames that were in the FIFO at pcm->delay_ts */
 	snd_pcm_uframes_t fifo_delay = pcm->delay_pcm_nread / pcm->frame_size;
+	delay = fifo_delay;
 
-	if (io->stream == SND_PCM_STREAM_CAPTURE) {
+	/* The buffer_delay is the number of frames that were in the buffer at
+	 * pcm->delay_ts, adjusted the number written by the application since
+	 * then. */
+	snd_pcm_sframes_t buffer_delay = snd_pcm_ioplug_hw_avail(io, pcm->delay_hw_ptr, io->appl_ptr);
 
-		/* Start with maximum frames available in FIFO since pcm->delay_ts. */
-		delay = fifo_delay + tframes;
+	/* If the PCM is running, then some frames from the buffer may have been
+	 * consumed, so we add them before adjusting for time elapsed. */
+	if (io->state == SND_PCM_STATE_RUNNING)
+		delay += buffer_delay;
 
-		/* Adjust by the change in frames in the buffer. */
-		delay += io->buffer_size - snd_pcm_ioplug_hw_avail(io, pcm->delay_hw_ptr, io->appl_ptr);
+	/* Adjust the total delay by the number of frames consumed. */
+	if ((delay -= tframes) < 0)
+		delay = 0;
 
-		/* impose upper limit */
-		snd_pcm_sframes_t limit = pcm->fifo_size + io->buffer_size;
-		if (delay > limit)
-			delay = limit;
-
-	}
-	else {
-
-		delay = fifo_delay;
-
-		/* The buffer_delay is the number of frames that were in the buffer at
-		 * pcm->delay_ts, adjusted the number written by the application since
-		 * then. */
-		snd_pcm_sframes_t buffer_delay = snd_pcm_ioplug_hw_avail(io, pcm->delay_hw_ptr, io->appl_ptr);
-
-		/* If the PCM is running, then some frames from the buffer may have been
-		 * consumed, so we add them before adjusting for time elapsed. */
-		if (io->state == SND_PCM_STATE_RUNNING)
-			delay += buffer_delay;
-
-		/* Adjust the total delay by the number of frames consumed. */
-		if ((delay -= tframes) < 0)
-			delay = 0;
-
-		/* If the PCM is not running, then the frames in the buffer will not have
-		 * been consumed since pcm->delay_ts, so we add them after the time
-		 * elapsed adjustment. */
-		if (io->state != SND_PCM_STATE_RUNNING)
-			delay += buffer_delay;
-	}
+	/* If the PCM is not running, then the frames in the buffer will not have
+	 * been consumed since pcm->delay_ts, so we add them after the time
+	 * elapsed adjustment. */
+	if (io->state != SND_PCM_STATE_RUNNING)
+		delay += buffer_delay;
 
 	pthread_mutex_unlock(&pcm->mutex);
 
