@@ -105,10 +105,10 @@ PCM Parameters
     softvol value. The default value is **unchanged**.
 
   HWCOMPAT
-    Modifies the behaviour of the plugin on ``a2dp-sink``, ``hfp-hf`` and
+    Modifies the behavior of the plugin on ``a2dp-sink``, ``hfp-hf`` and
     ``hsp-hs`` nodes in order to align better with the behaviour of the ALSA
-    ``hw`` plugin. This is a string option which takes the values **"none"**,
-    **"busy"** or **silence**.
+    ``hw`` plugin. This is a string option which takes the values **none**,
+    **busy** or **silence**.
     See `Transport acquisition`_ in the **NOTES** section below for more
     information.
 
@@ -580,12 +580,12 @@ transfer when the plugin starts the PCM.
 When used on an A2DP sink or HFP/HSP HF/HS node then **bluealsad(8)** must wait
 for the remote device to acquire the transport. The ALSA PCM plugin state model
 does not define any state that can be directly mapped to this situation, so
-the BlueALSA PCM plugin offers a choice of behaviours to suit various
+the BlueALSA PCM plugin offers a choice of behaviors to suit various
 application requirements. The choice is selected using the parameter
 **hwcompat** (**HWCOMPAT** argument to the pre-defined `bluealsa` PCM) which
-takes the following values:
+takes one of the following values:
 
-- "none"
+- none
 
     By default during this waiting time the PCM plugin behaves as if the device
     timer is stopped; it does not generate any poll() events, and the
@@ -597,7 +597,7 @@ takes the following values:
     ones which attempt to manage latency such as ``alsaloop(1)``, may become
     unstable in this situation.
 
-- "busy"
+- busy
 
     Causes snd_pcm_open() to return immediately with error code **-EBUSY**
     ("Device or resource busy") on A2DP sink, HFP-HF and HSP-HS nodes if the
@@ -605,11 +605,14 @@ takes the following values:
     PCM stream and enters the **SND_PCM_STATE_DISCONNECTED** state if the
     remote device releases the transport while in use.
 
-- "silence"
+- silence
 
     Inserts silence for capture streams, or simply drops frames for playback
-    streams, whenever the transport is not acquired, thus maintaining a
-    continuous stream as far as the application is concerned.
+    streams, whenever the transport is not acquired. Short intervals of silence
+    may also be inserted into capture streams if there is a break in the
+    incoming stream (for example as a result Bluetooth link instability). By
+    this means a continuous stream is maintained as far as the application is
+    concerned, which matches the behavior of a hardware ADC.
 
 PCM drain and non-blocking operation
 ------------------------------------
