@@ -238,9 +238,9 @@ static void capture_silence(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, 
 /**
  * Transfer a chunk of audio frames from the FIFO to the ALSA buffer.
  * The whole chunk is read "atomically" to ensure that frames are not
- * fragmented, so the hw pointer can be correctly updated.
- * Regulates the average rate at which frames are transferred, and inserts
- * intervals of silence into the stream if necessary to maintain the rate.
+ * fragmented, so that the hw pointer can be correctly updated.
+ * Inserts intervals of silence into the stream if necessary to complete the
+ * requested number of frames by the given deadline.
  * @return true if transfer completed successfully, false if error occurred. */
 static bool io_thread_read_hwcompat(struct bluealsa_pcm *pcm, snd_pcm_uframes_t offset, snd_pcm_uframes_t frames, struct timespec *deadline) {
 
@@ -313,7 +313,7 @@ static bool io_thread_read_hwcompat(struct bluealsa_pcm *pcm, snd_pcm_uframes_t 
 			}
 
 			/* Allow for fragmented period at end of buffer. */
-			snd_pcm_uframes_t chunk = MIN((frames - tframes), pcm->fifo_size / 4);
+			snd_pcm_uframes_t chunk = frames - tframes;
 			const snd_pcm_uframes_t avail = pcm->io.buffer_size - offset;
 			if (avail < chunk)
 				chunk = avail;
@@ -555,6 +555,7 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 				timespecadd(&ts, &asrs.ts0, &deadline);
 				if (!io_thread_read_hwcompat(pcm, offset, frames, &deadline))
 					goto fail;
+				/* Regulate the average rate at which frames are transferred */
 				asrsync_sync(&asrs, frames);
 			}
 			else {
