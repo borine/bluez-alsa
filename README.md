@@ -274,7 +274,12 @@ issue will not discover the information in there.
 
 If reporting a problem as a new issue, please use the appropriate
 [bluez-alsa GitHub issue reporting template][] and complete each section of
-the template as fully as possible.
+the template as fully as possible. Note that the `Bug report` template should
+be used for all questions relating to a specific installation of BlueALSA, even
+if you are not sure that it is a bug (the name of the template is set by
+Github; `Problem report` would be more appropriate). In this way readers will
+be given specific information about the context of the problem which will make
+it easier to find a solution.
 
 [NEWS]: NEWS
 [CONTRIBUTING]: CONTRIBUTING.md
