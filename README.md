@@ -233,11 +233,32 @@ wrapper as follows:
 bluealsa-aplay -L
 ```
 
+## Release Policy
+
+The bluez-alsa project does not create nor distribute release software
+packages. However, at irregular intervals, when an important new feature is
+considered stable then the `master` branch is tagged with a release version
+number. These tags are included only to mark reference baselines; their main
+purpose is to help Linux Distribution package maintainers to relate their own
+package versioning schemes to the original codebase.
+
+A release tag is formed as `vN.N.N` where the first number indicates a change
+to the D-Bus API, the second a feature addition that does not affect the API,
+and the third a significant bug-fix or internal change. A change to the D-Bus
+API is generally not backwards compatible. The significant changes included in
+each tag are listed in the [NEWS] file. For more detail on the changes
+please consult the [commit history].
+
+All changes are applied only to the `master` branch. There are no release
+branches and no support for old release tags. Distributions are expected to
+maintain their own patches if they need to support a package based on a release
+tag without upgrading to the latest `master` branch source.
+
 ## Contributing
 
 This project welcomes contributions of code, documentation and testing.
 
-Please see the [CONTRIBUTING](CONTRIBUTING.md) guide for details.
+Please see the [CONTRIBUTING] guide for details.
 
 ## Bug reports, feature requests, and requests for help
 
@@ -255,8 +276,11 @@ If reporting a problem as a new issue, please use the appropriate
 [bluez-alsa GitHub issue reporting template][] and complete each section of
 the template as fully as possible.
 
+[NEWS]: NEWS
+[CONTRIBUTING]: CONTRIBUTING.md
 [TROUBLESHOOTING]: TROUBLESHOOTING.md
 [manual pages]: doc/
+[commit history]: https://github.com/arkq/bluez-alsa/commits/master/
 [previous issues]: https://github.com/arkq/bluez-alsa/issues
 [wiki]: https://github.com/arkq/bluez-alsa/wiki
 [bluez-alsa GitHub issue reporting template]: https://github.com/arkq/bluez-alsa/issues/new/choose
