@@ -236,18 +236,19 @@ bluealsa-aplay -L
 ## Release Policy
 
 The bluez-alsa project does not create nor distribute release software
-packages. However, at irregular intervals, when an important new feature is
-considered stable then the `master` branch is tagged with a release version
+packages. However, at irregular intervals, when an important new feature or fix
+is considered stable then the `master` branch is tagged with a release version
 number. These tags are included only to mark reference baselines; their main
-purpose is to help Linux Distribution package maintainers to relate their own
+purpose is to help Linux distribution package maintainers to relate their own
 package versioning schemes to the original codebase.
 
 A release tag is formed as `vN.N.N` where the first number indicates a change
-to the D-Bus API, the second a feature addition that does not affect the API,
-and the third a significant bug-fix or internal change. A change to the D-Bus
-API is generally not backwards compatible. The significant changes included in
-each tag are listed in the [NEWS] file. For more detail on the changes
-please consult the [commit history].
+that is **not** backwards compatible (often a change to the D-Bus API), the
+second a feature addition that **is** backwards compatible, and the third a
+backwards compatible bug-fix or internal change. This scheme complies with the
+rules of [Semantic Versioning]. The most significant changes included in each
+tag are listed in the [NEWS] file. For more detail on the changes please
+consult the [commit history].
 
 All changes are applied only to the `master` branch. There are no release
 branches and no support for old release tags. Distributions are expected to
@@ -289,6 +290,7 @@ it easier to find a solution.
 [previous issues]: https://github.com/arkq/bluez-alsa/issues
 [wiki]: https://github.com/arkq/bluez-alsa/wiki
 [bluez-alsa GitHub issue reporting template]: https://github.com/arkq/bluez-alsa/issues/new/choose
+[Semantic Versioning]: https://semver.org/
 
 ## License
 
@@ -303,3 +305,4 @@ file](LICENSE) for details.
 1. [RTP Payload Format for MPEG-4](https://tools.ietf.org/html/rfc6416)
 1. [Coding of MPEG-4 Audio](https://www.iso.org/standard/42739.html)
 1. [ALSA project library reference](https://www.alsa-project.org/alsa-doc/alsa-lib/index.html)
+1. [Semantic Versioning]
