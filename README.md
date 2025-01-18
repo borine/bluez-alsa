@@ -277,8 +277,7 @@ If reporting a problem as a new issue, please use the appropriate
 [bluez-alsa GitHub issue reporting template][] and complete each section of
 the template as fully as possible. Note that the `Bug report` template should
 be used for all questions relating to a specific installation of BlueALSA, even
-if you are not sure that it is a bug (the name of the template is set by
-Github; `Problem report` would be more appropriate). In this way readers will
+if you are not sure that it is a bug. In this way readers will
 be given specific information about the context of the problem which will make
 it easier to find a solution.
 
@@ -305,4 +304,3 @@ file](LICENSE) for details.
 1. [RTP Payload Format for MPEG-4](https://tools.ietf.org/html/rfc6416)
 1. [Coding of MPEG-4 Audio](https://www.iso.org/standard/42739.html)
 1. [ALSA project library reference](https://www.alsa-project.org/alsa-doc/alsa-lib/index.html)
-1. [Semantic Versioning]
