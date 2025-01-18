@@ -1,5 +1,5 @@
 ---
-name: "\U0001F41B Bug report"
+name: "\U0001F41B Problem report"
 about: Create a report to help improve bluez-alsa.
 title:
 ---
@@ -9,9 +9,9 @@ title:
 
 ### Problem
 
-> A clear and concise description of what the bug is.
-> If possible, please check if the bug still exists in the master branch (or
-> the latest release if you are not using it already).
+> A clear and concise description of what the problem is.
+> If possible, please check if the problem still exists in the master branch
+> (or the latest release if you are not using it already).
 
 ### Reproduction steps
 
