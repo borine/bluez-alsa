@@ -1,6 +1,6 @@
 /*
  * BlueALSA - alsa-pcm.c
- * Copyright (c) 2016-2023 Arkadiusz Bokowy
+ * Copyright (c) 2016-2025 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "shared/log.h"
 
 static int alsa_pcm_set_hw_params(snd_pcm_t *pcm, snd_pcm_format_t format, int channels,
 		int rate, unsigned int *buffer_time, unsigned int *period_time, char **msg) {
@@ -75,16 +77,17 @@ fail:
 	return err;
 }
 
-static int alsa_pcm_set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
+static int alsa_pcm_set_sw_params(struct alsa_pcm *pcm, snd_pcm_uframes_t buffer_size,
 		snd_pcm_uframes_t period_size, char **msg) {
 
+	snd_pcm_t *snd_pcm = pcm->handle;
 	snd_pcm_sw_params_t *params;
 	char buf[256];
 	int err;
 
 	snd_pcm_sw_params_alloca(&params);
 
-	if ((err = snd_pcm_sw_params_current(pcm, params)) != 0) {
+	if ((err = snd_pcm_sw_params_current(snd_pcm, params)) != 0) {
 		snprintf(buf, sizeof(buf), "Get current params: %s", snd_strerror(err));
 		goto fail;
 	}
@@ -93,21 +96,23 @@ static int alsa_pcm_set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
 	 * spare capacity to accommodate bursts and short breaks in the
 	 * Bluetooth stream. */
 	snd_pcm_uframes_t threshold = buffer_size / 2;
-	if ((err = snd_pcm_sw_params_set_start_threshold(pcm, params, threshold)) != 0) {
+	if ((err = snd_pcm_sw_params_set_start_threshold(snd_pcm, params, threshold)) != 0) {
 		snprintf(buf, sizeof(buf), "Set start threshold: %s: %lu", snd_strerror(err), threshold);
 		goto fail;
 	}
 
 	/* Allow the transfer when at least period_size samples can be processed. */
-	if ((err = snd_pcm_sw_params_set_avail_min(pcm, params, period_size)) != 0) {
+	if ((err = snd_pcm_sw_params_set_avail_min(snd_pcm, params, period_size)) != 0) {
 		snprintf(buf, sizeof(buf), "Set avail min: %s: %lu", snd_strerror(err), period_size);
 		goto fail;
 	}
 
-	if ((err = snd_pcm_sw_params(pcm, params)) != 0) {
+	if ((err = snd_pcm_sw_params(snd_pcm, params)) != 0) {
 		snprintf(buf, sizeof(buf), "%s", snd_strerror(err));
 		goto fail;
 	}
+
+	pcm->start_threshold = threshold;
 
 	return 0;
 
@@ -117,58 +122,116 @@ fail:
 	return err;
 }
 
-int alsa_pcm_open(snd_pcm_t **pcm, const char *name,
-		snd_pcm_format_t format, int channels, int rate,
-		unsigned int *buffer_time, unsigned int *period_time,
+void alsa_pcm_init(struct alsa_pcm *pcm) {
+	pcm->handle = NULL;
+}
+
+int alsa_pcm_open(
+		struct alsa_pcm *pcm,
+		const char *name,
+		snd_pcm_format_t format,
+		int channels,
+		unsigned int rate,
+		unsigned int buffer_time,
+		unsigned int period_time,
+		int flags,
 		char **msg) {
 
-	snd_pcm_t *_pcm = NULL;
 	char *tmp = NULL;
 	char buf[256];
 	int err;
 
-	if ((err = snd_pcm_open(&_pcm, name, SND_PCM_STREAM_PLAYBACK, 0)) != 0) {
+	assert (pcm->handle == NULL);
+
+	if ((err = snd_pcm_open(&pcm->handle, name, SND_PCM_STREAM_PLAYBACK, flags)) != 0) {
 		snprintf(buf, sizeof(buf), "Open PCM: %s", snd_strerror(err));
 		goto fail;
 	}
 
-	if ((err = alsa_pcm_set_hw_params(_pcm, format, channels, rate, buffer_time, period_time, &tmp)) != 0) {
+	unsigned int actual_buffer_time = buffer_time;
+	unsigned int actual_period_time = period_time;
+	if ((err = alsa_pcm_set_hw_params(pcm->handle, format, channels, rate,
+				&actual_buffer_time, &actual_period_time, &tmp)) != 0) {
 		snprintf(buf, sizeof(buf), "Set HW params: %s", tmp);
 		goto fail;
 	}
 
 	snd_pcm_uframes_t buffer_size, period_size;
-	if ((err = snd_pcm_get_params(_pcm, &buffer_size, &period_size)) != 0) {
+	if ((err = snd_pcm_get_params(pcm->handle, &buffer_size, &period_size)) != 0) {
 		snprintf(buf, sizeof(buf), "Get params: %s", snd_strerror(err));
 		goto fail;
 	}
 
-	if ((err = alsa_pcm_set_sw_params(_pcm, buffer_size, period_size, &tmp)) != 0) {
+	if ((err = alsa_pcm_set_sw_params(pcm, buffer_size, period_size, &tmp)) != 0) {
 		snprintf(buf, sizeof(buf), "Set SW params: %s", tmp);
 		goto fail;
 	}
 
-	if ((err = snd_pcm_prepare(_pcm)) != 0) {
+	if ((err = snd_pcm_prepare(pcm->handle)) != 0) {
 		snprintf(buf, sizeof(buf), "Prepare: %s", snd_strerror(err));
 		goto fail;
 	}
 
-	*pcm = _pcm;
+	pcm->format = format;
+	pcm->channels = channels;
+	pcm->sample_size = snd_pcm_format_size(format, 1);
+	pcm->frame_size = snd_pcm_format_size(format, channels);
+	pcm->rate = rate;
+	pcm->buffer_time = actual_buffer_time;
+	pcm->period_time = actual_period_time;
+	pcm->buffer_frames = buffer_size;
+	pcm->period_frames = period_size;
+
 	return 0;
 
 fail:
-	if (_pcm != NULL)
-		snd_pcm_close(_pcm);
+	if (pcm->handle != NULL)
+		snd_pcm_close(pcm->handle);
+	pcm->handle = NULL;
 	if (msg != NULL)
 		*msg = strdup(buf);
 	if (tmp != NULL)
 		free(tmp);
 	return err;
+
 }
 
-void alsa_pcm_dump(snd_pcm_t *pcm, FILE *fp) {
+int alsa_pcm_write(struct alsa_pcm *pcm, ffb_t *buffer) {
+	size_t samples = ffb_len_out(buffer);
+	snd_pcm_sframes_t frames;
+
+	for (;;) {
+		frames = samples / pcm->channels;
+		if ((frames = snd_pcm_writei(pcm->handle, buffer->data, frames)) > 0)
+			break;
+		switch (-frames) {
+		case EINTR:
+			continue;
+		case EPIPE:
+			debug("ALSA playback PCM underrun");
+			snd_pcm_prepare(pcm->handle);
+			continue;
+		default:
+			error("ALSA playback PCM write error: %s", snd_strerror(frames));
+			return -1;
+		}
+	}
+
+	/* Move leftovers to the beginning of buffer and reposition tail. */
+	ffb_shift(buffer, frames * pcm->channels);
+	return 0;
+}
+
+void alsa_pcm_dump(const struct alsa_pcm *pcm, FILE *fp) {
 	snd_output_t *out;
 	snd_output_stdio_attach(&out, fp, 0);
-	snd_pcm_dump(pcm, out);
+	snd_pcm_dump(pcm->handle, out);
 	snd_output_close(out);
+}
+
+void alsa_pcm_close(struct alsa_pcm *pcm) {
+	if (pcm->handle != NULL) {
+		snd_pcm_close(pcm->handle);
+		pcm->handle = NULL;
+	}
 }
