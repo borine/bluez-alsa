@@ -35,12 +35,14 @@ void delay_report_init(struct delay_report *dr,
 	dr->ba_pcm_fd = ba_pcm_fd;
 	memset(&dr->update_ts, 0, sizeof(dr->update_ts));
 	memset(dr->values, 0, sizeof(dr->values));
+	dr->avg_value = 0;
 	dr->values_i = 0;
 	dr->frame_size = frame_size;
 }
 
 void delay_report_reset(struct delay_report *dr) {
 	memset(dr->values, 0, sizeof(dr->values));
+	dr->values_i = 0;
 }
 
 bool delay_report_update(struct delay_report *dr,
@@ -68,7 +70,11 @@ bool delay_report_update(struct delay_report *dr,
 	snd_pcm_sframes_t delay_frames_avg = 0;
 	for (size_t i = 0; i < num_values; i++)
 		delay_frames_avg += dr->values[i];
-	delay_frames_avg /= num_values;
+	if (dr->values_i < num_values)
+		delay_frames_avg /= dr->values_i;
+	else
+		delay_frames_avg /= num_values;
+	dr->avg_value = delay_frames_avg;
 
 	const int delay = delay_frames_avg * 10000 / dr->ba_pcm->rate;
 	if (difftimespec(&ts_now, &ts_delay, &ts_delay) < 0 &&

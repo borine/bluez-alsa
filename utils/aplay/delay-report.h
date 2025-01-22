@@ -28,6 +28,7 @@ struct delay_report {
 	struct timespec update_ts;
 	/* Window buffer for calculating delay moving average. */
 	snd_pcm_sframes_t values[64];
+	snd_pcm_sframes_t avg_value;
 	size_t values_i;
 	size_t frame_size;
 };
