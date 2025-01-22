@@ -32,24 +32,25 @@ struct alsa_pcm {
 	size_t sample_size;
 	size_t frame_size;
 	size_t delay;
+	bool underrun;
 	snd_pcm_t *handle;
 };
 
 void alsa_pcm_init(struct alsa_pcm *pcm);
 
 int alsa_pcm_open(
-		struct alsa_pcm *pcm,
-		const char *name,
-		snd_pcm_format_t format,
-		int channels,
-		unsigned int rate,
-		unsigned int buffer_time,
-		unsigned int period_time,
-		int flags,
-		char **msg);
+		struct alsa_pcm *pcm, const char *name,
+		snd_pcm_format_t format_1, snd_pcm_format_t format_2,
+		int channels, unsigned int rate,
+		unsigned int buffer_time, unsigned int period_time,
+		int flags, char **msg);
 
 inline static bool alsa_pcm_is_open(const struct alsa_pcm *pcm) {
 	return pcm->handle != NULL;
+}
+
+inline static bool alsa_pcm_is_running(const struct alsa_pcm *pcm) {
+	return snd_pcm_state(pcm->handle) == SND_PCM_STATE_RUNNING;
 }
 
 inline static ssize_t alsa_pcm_frames_to_bytes(const struct alsa_pcm *pcm,
