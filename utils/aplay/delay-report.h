@@ -32,6 +32,7 @@ struct delay_report {
 
 	/* Window buffer for calculating delay moving average. */
 	snd_pcm_sframes_t values[64];
+	snd_pcm_sframes_t avg_value;
 	size_t values_i;
 
 };
