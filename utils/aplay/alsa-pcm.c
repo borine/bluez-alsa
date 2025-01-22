@@ -10,6 +10,7 @@
 
 #include "alsa-pcm.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,9 +19,12 @@
 
 static int alsa_pcm_set_hw_params(
 		struct alsa_pcm *pcm,
-		snd_pcm_format_t format,
+		snd_pcm_format_t format_1,
+		snd_pcm_format_t format_2,
+		snd_pcm_format_t *format,
 		unsigned int channels,
-		unsigned int rate,
+		unsigned int *rate,
+		bool exact_rate,
 		unsigned int *buffer_time,
 		unsigned int *period_time,
 		char **msg) {
@@ -33,6 +37,7 @@ static int alsa_pcm_set_hw_params(
 	int err;
 
 	snd_pcm_hw_params_alloca(&params);
+	*format = SND_PCM_FORMAT_UNKNOWN;
 
 	if ((err = snd_pcm_hw_params_any(snd_pcm, params)) < 0) {
 		snprintf(buf, sizeof(buf), "Set all possible ranges: %s", snd_strerror(err));
@@ -40,12 +45,27 @@ static int alsa_pcm_set_hw_params(
 	}
 
 	if ((err = snd_pcm_hw_params_set_access(snd_pcm, params, access)) != 0) {
-		snprintf(buf, sizeof(buf), "Set assess type: %s: %s", snd_strerror(err), snd_pcm_access_name(access));
+		snprintf(buf, sizeof(buf), "Set assess type: %s: %s",
+				snd_strerror(err), snd_pcm_access_name(access));
 		goto fail;
 	}
 
-	if ((err = snd_pcm_hw_params_set_format(snd_pcm, params, format)) != 0) {
-		snprintf(buf, sizeof(buf), "Set format: %s: %s", snd_strerror(err), snd_pcm_format_name(format));
+	/* Prefer the first format if it is supported by the device. */
+	if ((err = snd_pcm_hw_params_set_format(snd_pcm, params, format_1)) == 0)
+		*format = format_1;
+	/* Otherwise try second format. */
+	else if (format_2 != SND_PCM_FORMAT_UNKNOWN) {
+		if ((err = snd_pcm_hw_params_set_format(snd_pcm, params, format_2)) == 0)
+			*format = format_2;
+		else {
+			snprintf(buf, sizeof(buf), "Set format: %s: %s and %s",
+					snd_strerror(err), snd_pcm_format_name(format_1), snd_pcm_format_name(format_2));
+			goto fail;
+		}
+	}
+	else {
+		snprintf(buf, sizeof(buf), "Set format: %s: %s",
+				snd_strerror(err), snd_pcm_format_name(format_1));
 		goto fail;
 	}
 
@@ -54,8 +74,13 @@ static int alsa_pcm_set_hw_params(
 		goto fail;
 	}
 
-	if ((err = snd_pcm_hw_params_set_rate(snd_pcm, params, rate, 0)) != 0) {
-		snprintf(buf, sizeof(buf), "Set sample rate: %s: %d", snd_strerror(err), rate);
+	dir = 0;
+	if (exact_rate)
+		err = snd_pcm_hw_params_set_rate(snd_pcm, params, *rate, dir);
+	else
+		err = snd_pcm_hw_params_set_rate_near(snd_pcm, params, rate, &dir);
+	if (err != 0) {
+		snprintf(buf, sizeof(buf), "Set sample rate: %s: %u", snd_strerror(err), *rate);
 		goto fail;
 	}
 
@@ -86,8 +111,7 @@ fail:
 
 static int alsa_pcm_set_sw_params(
 		struct alsa_pcm *pcm,
-		snd_pcm_uframes_t buffer_size,
-		snd_pcm_uframes_t period_size,
+		snd_pcm_uframes_t start_threshold,
 		char **msg) {
 
 	snd_pcm_t *snd_pcm = pcm->pcm;
@@ -102,16 +126,8 @@ static int alsa_pcm_set_sw_params(
 		goto fail;
 	}
 
-	/* Start the transfer when three periods have been written (or when the
-	 * buffer is full if it holds less than three periods. */
-	snd_pcm_uframes_t threshold = period_size * 3;
-	if (threshold > buffer_size)
-		threshold = buffer_size;
-
-	pcm->start_threshold = threshold;
-
-	if ((err = snd_pcm_sw_params_set_start_threshold(snd_pcm, params, threshold)) != 0) {
-		snprintf(buf, sizeof(buf), "Set start threshold: %s: %lu", snd_strerror(err), threshold);
+	if ((err = snd_pcm_sw_params_set_start_threshold(snd_pcm, params, start_threshold)) != 0) {
+		snprintf(buf, sizeof(buf), "Set start threshold: %s: %lu", snd_strerror(err), start_threshold);
 		goto fail;
 	}
 
@@ -135,7 +151,8 @@ void alsa_pcm_init(struct alsa_pcm *pcm) {
 int alsa_pcm_open(
 		struct alsa_pcm *pcm,
 		const char *name,
-		snd_pcm_format_t format,
+		snd_pcm_format_t format_1,
+		snd_pcm_format_t format_2,
 		unsigned int channels,
 		unsigned int rate,
 		unsigned int buffer_time,
@@ -145,6 +162,10 @@ int alsa_pcm_open(
 
 	char *tmp = NULL;
 	char buf[256];
+	unsigned int actual_buffer_time = buffer_time;
+	unsigned int actual_period_time = period_time;
+	unsigned int actual_rate = rate;
+	const bool exact_rate = !(flags & SND_PCM_NO_AUTO_RESAMPLE);
 	int err;
 
 	if ((err = snd_pcm_open(&pcm->pcm, name, SND_PCM_STREAM_PLAYBACK, flags)) != 0) {
@@ -152,9 +173,8 @@ int alsa_pcm_open(
 		goto fail;
 	}
 
-	unsigned int actual_buffer_time = buffer_time;
-	unsigned int actual_period_time = period_time;
-	if ((err = alsa_pcm_set_hw_params(pcm, format, channels, rate,
+	if ((err = alsa_pcm_set_hw_params(pcm, format_1, format_2,
+				&pcm->format, channels, &actual_rate, exact_rate,
 				&actual_buffer_time, &actual_period_time, &tmp)) != 0) {
 		snprintf(buf, sizeof(buf), "Set HW params: %s", tmp);
 		goto fail;
@@ -166,7 +186,13 @@ int alsa_pcm_open(
 		goto fail;
 	}
 
-	if ((err = alsa_pcm_set_sw_params(pcm, buffer_size, period_size, &tmp)) != 0) {
+	/* Start the transfer when three requested periods have been written (or
+	 * when the buffer is full if it holds less than three requested periods. */
+	snd_pcm_uframes_t start_threshold = ((snd_pcm_uframes_t)period_time * 3 / 1000) * (rate / 1000);
+	if (start_threshold > buffer_size)
+		start_threshold = buffer_size;
+
+	if ((err = alsa_pcm_set_sw_params(pcm, start_threshold, &tmp)) != 0) {
 		snprintf(buf, sizeof(buf), "Set SW params: %s", tmp);
 		goto fail;
 	}
@@ -176,15 +202,15 @@ int alsa_pcm_open(
 		goto fail;
 	}
 
-	pcm->format = format;
 	pcm->channels = channels;
-	pcm->sample_size = snd_pcm_format_size(format, 1);
-	pcm->frame_size = snd_pcm_format_size(format, channels);
-	pcm->rate = rate;
+	pcm->sample_size = snd_pcm_format_size(pcm->format, 1);
+	pcm->frame_size = snd_pcm_format_size(pcm->format, channels);
+	pcm->rate = actual_rate;
 	pcm->buffer_time = actual_buffer_time;
 	pcm->period_time = actual_period_time;
 	pcm->buffer_frames = buffer_size;
 	pcm->period_frames = period_size;
+	pcm->start_threshold = start_threshold;
 	pcm->delay = 0;
 	pcm->hw_avail = 0;
 
@@ -216,7 +242,7 @@ int alsa_pcm_write(
 	pcm->underrun = false;
 	if ((ret = snd_pcm_avail_delay(pcm->pcm, &avail, &delay)) < 0) {
 		if (ret == -EPIPE) {
-			debug("ALSA playback PCM underrun");
+			warn("ALSA playback PCM underrun");
 			snd_pcm_prepare(pcm->pcm);
 			pcm->underrun = true;
 			avail = pcm->buffer_frames;
@@ -230,7 +256,7 @@ int alsa_pcm_write(
 
 	snd_pcm_sframes_t frames = ffb_len_out(buffer) / pcm->channels;
 	snd_pcm_uframes_t hw_avail = pcm->buffer_frames - avail;
-	snd_pcm_sframes_t written_frames = 0;
+	snd_pcm_uframes_t written_frames = 0;
 
 	if (!drain) {
 
@@ -238,7 +264,7 @@ int alsa_pcm_write(
 					snd_pcm_state(pcm->pcm) == SND_PCM_STATE_RUNNING) {
 			/* When the stream runs dry we drain the ALSA buffer and leave the
 			 * ALSA device stopped until fresh frames arrive from the server. */
-			debug("Draining ALSA playback PCM to avoid underrun");
+			warn("Draining ALSA playback PCM to avoid underrun");
 			snd_pcm_drain(pcm->pcm);
 			snd_pcm_prepare(pcm->pcm);
 			/* Flag an underrun to indicate that there has been a discontinuity
@@ -263,7 +289,7 @@ int alsa_pcm_write(
 			case EINTR:
 				continue;
 			case EPIPE:
-				debug("ALSA playback PCM underrun");
+				warn("ALSA playback PCM underrun");
 				snd_pcm_prepare(pcm->pcm);
 				pcm->underrun = true;
 				continue;
