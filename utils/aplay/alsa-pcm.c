@@ -92,18 +92,13 @@ static int alsa_pcm_set_sw_params(struct alsa_pcm *pcm, snd_pcm_uframes_t buffer
 		goto fail;
 	}
 
-	/* Start the transfer when the buffer is half full - this allows
-	 * spare capacity to accommodate bursts and short breaks in the
-	 * Bluetooth stream. */
-	snd_pcm_uframes_t threshold = buffer_size / 2;
+	/* Start the transfer when three periods have been written (or when the
+	 * buffer is full if it holds less than three periods. */
+	snd_pcm_uframes_t threshold = period_size * 3;
+	if (threshold > buffer_size)
+		threshold = buffer_size;
 	if ((err = snd_pcm_sw_params_set_start_threshold(snd_pcm, params, threshold)) != 0) {
 		snprintf(buf, sizeof(buf), "Set start threshold: %s: %lu", snd_strerror(err), threshold);
-		goto fail;
-	}
-
-	/* Allow the transfer when at least period_size samples can be processed. */
-	if ((err = snd_pcm_sw_params_set_avail_min(snd_pcm, params, period_size)) != 0) {
-		snprintf(buf, sizeof(buf), "Set avail min: %s: %lu", snd_strerror(err), period_size);
 		goto fail;
 	}
 
@@ -124,6 +119,7 @@ fail:
 
 void alsa_pcm_init(struct alsa_pcm *pcm) {
 	pcm->handle = NULL;
+	pcm->underrun = false;
 }
 
 int alsa_pcm_open(
@@ -181,6 +177,11 @@ int alsa_pcm_open(
 	pcm->period_time = actual_period_time;
 	pcm->buffer_frames = buffer_size;
 	pcm->period_frames = period_size;
+	pcm->delay = 0;
+
+	/* Maintain buffer fill level above 1 period plus 2ms to allow for
+	 * scheduling delays */
+	pcm->underrun_threshold = pcm->period_frames + pcm->rate * 2 / 1000;
 
 	return 0;
 
@@ -196,29 +197,81 @@ fail:
 
 }
 
-int alsa_pcm_write(struct alsa_pcm *pcm, ffb_t *buffer) {
-	size_t samples = ffb_len_out(buffer);
-	snd_pcm_sframes_t frames;
+int alsa_pcm_write(struct alsa_pcm *pcm, ffb_t *buffer, bool drain, bool verbose) {
+	snd_pcm_sframes_t avail = 0;
+	snd_pcm_sframes_t delay = 0;
+	snd_pcm_sframes_t ret;
 
-	for (;;) {
-		frames = samples / pcm->channels;
-		if ((frames = snd_pcm_writei(pcm->handle, buffer->data, frames)) > 0)
-			break;
-		switch (-frames) {
-		case EINTR:
-			continue;
-		case EPIPE:
+	pcm->underrun = false;
+	if ((ret = snd_pcm_avail_delay(pcm->handle, &avail, &delay)) < 0) {
+		if (ret == -EPIPE) {
 			debug("ALSA playback PCM underrun");
+			pcm->underrun = true;
 			snd_pcm_prepare(pcm->handle);
-			continue;
-		default:
-			error("ALSA playback PCM write error: %s", snd_strerror(frames));
+			avail = pcm->buffer_frames;
+			delay = 0;
+		}
+		else {
+			error("ALSA playback PCM error: %s", snd_strerror(ret));
 			return -1;
 		}
 	}
 
-	/* Move leftovers to the beginning of buffer and reposition tail. */
-	ffb_shift(buffer, frames * pcm->channels);
+	snd_pcm_sframes_t frames = ffb_len_out(buffer) / pcm->channels;
+	snd_pcm_sframes_t written_frames = 0;
+
+	/* If not draining, write only as many frames as possible without blocking.
+	 * If necessary insert silemce frames to prevent underrun. */
+	if (!drain) {
+		if (frames > avail)
+			frames = avail;
+		else if (pcm->buffer_frames - avail + frames < pcm->underrun_threshold &&
+					snd_pcm_state(pcm->handle) == SND_PCM_STATE_RUNNING) {
+			/* Pad the buffer with enough silence to restore it to the underrun
+			 * threshold. */
+			size_t padding = (pcm->underrun_threshold - frames) * pcm->channels;
+			if (verbose)
+				info("Underrun imminent: inserting %zu silence frames", padding / pcm->channels);
+			snd_pcm_format_set_silence(pcm->format, buffer->tail, padding);
+			ffb_seek(buffer, padding);
+			frames += padding;
+		}
+	}
+
+	while (frames > 0) {
+		ret = snd_pcm_writei(pcm->handle, buffer->data, frames);
+		if (ret < 0)
+			switch (-ret) {
+			case EINTR:
+				continue;
+			case EPIPE:
+				debug("ALSA playback PCM underrun");
+				pcm->underrun = true;
+				snd_pcm_prepare(pcm->handle);
+				continue;
+			default:
+				error("ALSA playback PCM write error: %s", snd_strerror(ret));
+				return -1;
+			}
+		else {
+			written_frames += ret;
+			frames -= ret;
+			delay += ret;
+		}
+	}
+
+	if (drain) {
+		snd_pcm_drain(pcm->handle);
+		ffb_rewind(buffer);
+		return 0;
+	}
+
+	pcm->delay = delay + written_frames;
+
+	/* Move leftovers to the beginning and reposition tail. */
+	if (written_frames > 0)
+		ffb_shift(buffer, written_frames * pcm->channels);
+
 	return 0;
 }
 
