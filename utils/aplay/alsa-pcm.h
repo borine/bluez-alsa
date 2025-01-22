@@ -28,8 +28,10 @@ struct alsa_pcm {
 	snd_pcm_uframes_t buffer_frames;
 	snd_pcm_uframes_t period_frames;
 	snd_pcm_uframes_t start_threshold;
+	snd_pcm_uframes_t underrun_threshold;
 	size_t sample_size;
 	size_t frame_size;
+	size_t delay;
 	snd_pcm_t *handle;
 };
 
@@ -50,17 +52,12 @@ inline static bool alsa_pcm_is_open(const struct alsa_pcm *pcm) {
 	return pcm->handle != NULL;
 }
 
-inline static int alsa_pcm_delay(const struct alsa_pcm *pcm,
-				snd_pcm_sframes_t *delay) {
-	return snd_pcm_delay(pcm->handle, delay);
-}
-
 inline static ssize_t alsa_pcm_frames_to_bytes(const struct alsa_pcm *pcm,
 				snd_pcm_sframes_t frames) {
 	return snd_pcm_frames_to_bytes(pcm->handle, frames);
 }
 
-int alsa_pcm_write(struct alsa_pcm *pcm, ffb_t *buffer);
+int alsa_pcm_write(struct alsa_pcm *pcm, ffb_t *buffer, bool drain, bool verbose);
 void alsa_pcm_dump(const struct alsa_pcm *pcm, FILE *fp);
 void alsa_pcm_close(struct alsa_pcm *pcm);
 
