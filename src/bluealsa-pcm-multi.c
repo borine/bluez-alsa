@@ -1,6 +1,7 @@
 /*
  * BlueALSA - bluealsa-pcm-multi.c
  * Copyright (c) 2016-2025 Arkadiusz Bokowy
+ * Copyright (c) 2025 borine
  *
  * This file is a part of bluez-alsa.
  *

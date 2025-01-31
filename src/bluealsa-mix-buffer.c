@@ -1,6 +1,7 @@
 /*
  * BlueALSA - bluealsa-mix-buffer.c
  * Copyright (c) 2016-2025 Arkadiusz Bokowy
+ * Copyright (c) 2025 borine
  *
  * This file is a part of bluez-alsa.
  *
@@ -35,8 +36,8 @@
 #elif __BYTE_ORDER == __BIG_ENDIAN
 
 #include <byteswap.h>
-#define BA_S16_2LE_TO_INT32(x) (int16_t)byteswap_16(x)
-#define BA_S32_4LE_TO_INT64(x) (int32_t)byteswap_32(x)
+#define BA_S16_2LE_TO_INT32(x) (int16_t)bswap_16(x)
+#define BA_S32_4LE_TO_INT64(x) (int32_t)bswap_32(x)
 
 #define BA_S24_LE_TO_INT32(x) ( \
 	((uint32_t)x & 0xFF000000) >> 24 | \
