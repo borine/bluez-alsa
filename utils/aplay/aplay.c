@@ -466,7 +466,7 @@ static void *io_worker_routine(struct io_worker *w) {
 	/* Create a buffer big enough to hold enough PCM data for three periods.
 	 * This will be later be revised if necessary to match the actual ALSA
 	 * start threshold when the ALSA PCM is opened. */
-	const size_t nmemb = (pcm_period_time * 3 / 1000) * (pcm_1s_samples / 1000);
+	const size_t nmemb = ((size_t)pcm_period_time * 3 / 1000) * (pcm_1s_samples / 1000);
 	if (ffb_init(&read_buffer, nmemb, pcm_format_size) == -1) {
 		error("Couldn't create PCM buffer: %s", strerror(errno));
 		goto fail;
