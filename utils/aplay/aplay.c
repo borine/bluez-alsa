@@ -471,7 +471,7 @@ static void *io_worker_routine(struct io_worker *w) {
 	 * This will be later be revised if necessary to match the actual ALSA
 	 * start threshold when the ALSA PCM is opened. */
 	if (ffb_init(&read_buffer,
-			(pcm_period_time * 3 / 1000) * (w->ba_pcm.rate * w->ba_pcm.channels / 1000),
+			((size_t)pcm_period_time * 3 / 1000) * (w->ba_pcm.rate * w->ba_pcm.channels / 1000),
 			pcm_format_size) == -1) {
 		error("Couldn't create PCM buffer: %s", strerror(errno));
 		goto fail;

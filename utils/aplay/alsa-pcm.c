@@ -177,7 +177,7 @@ int alsa_pcm_open(
 
 	/* Start the transfer when three requested periods have been written (or
 	 * when the buffer is full if it holds less than three requested periods. */
-	snd_pcm_uframes_t start_threshold = (period_time * 3 / 1000) * (rate / 1000);
+	snd_pcm_uframes_t start_threshold = ((snd_pcm_uframes_t)period_time * 3 / 1000) * (rate / 1000);
 	if (start_threshold > buffer_size)
 		start_threshold = buffer_size;
 
