@@ -511,8 +511,8 @@ static void *io_worker_routine(struct io_worker *w) {
 		pcm_flags = SND_PCM_NO_AUTO_RESAMPLE | SND_PCM_NO_AUTO_FORMAT;
 		/* The libsamplerate resampler uses FLOAT internally, so prefer that if
 		 * the ALSA device supports it, to avoid the need to convert;
-		 * otherwise convert to the native endian integer format that is input
-		 * to the resampler. */
+		 * otherwise use the native endian integer format that is output
+		 * from the resampler. */
 		format_1 = resampler_preferred_format();
 		format_2 = resampler_native_format(pcm_format);
 	}

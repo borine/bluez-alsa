@@ -274,10 +274,10 @@ void resampler_format_le_to_native(void *buffer, size_t len, snd_pcm_format_t fo
 		uint32_t *data = buffer;
 		/* Convert to S32 */
 		for (n = 0; n < len; n++) {
-			if (data[n] & 0x00800000)
-				data[n] |= 0xff000000;
+			if (data[n] & 0x00000800)
+				data[n] |= 0x000000ff;
 			else
-				data[n] &= 0x00ffffff;
+				data[n] &= 0xffffff00;
 			bswap_32(data[n]);
 		}
 		break;
@@ -299,7 +299,9 @@ snd_pcm_format_t resampler_native_format(snd_pcm_format_t source_format) {
 	case SND_PCM_FORMAT_S16_LE:
 		return SND_PCM_FORMAT_S16;
 	case SND_PCM_FORMAT_S24_LE:
-		return SND_PCM_FORMAT_S24;
+		/* 24bit samples must be converted to 32 bit before passing to
+		 * the resampler */
+		return SND_PCM_FORMAT_S32;
 	case SND_PCM_FORMAT_S32_LE:
 		return SND_PCM_FORMAT_S32;
 	default:
