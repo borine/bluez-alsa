@@ -274,7 +274,7 @@ void resampler_format_le_to_native(void *buffer, size_t len, snd_pcm_format_t fo
 		uint32_t *data = buffer;
 		/* Convert to S32 */
 		for (n = 0; n < len; n++) {
-			if (data[n] & 0x00000800)
+			if (data[n] & 0x00008000)
 				data[n] |= 0x000000ff;
 			else
 				data[n] &= 0xffffff00;
