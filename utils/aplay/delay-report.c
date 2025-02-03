@@ -8,7 +8,7 @@
  *
  */
 
-#include "delay-reporting.h"
+#include "delay-report.h"
 
 #include <stdbool.h>
 #include <stdlib.h>

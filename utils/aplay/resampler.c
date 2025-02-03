@@ -1,6 +1,7 @@
 /*
  * BlueALSA - resampler.c
  * Copyright (c) 2016-2025 Arkadiusz Bokowy
+ * Copyright (c) 2025 borine
  *
  * This file is a part of bluez-alsa.
  *
@@ -11,6 +12,7 @@
 #include <alsa/asoundlib.h>
 #include <samplerate.h>
 
+#include <endian.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <sys/param.h>
@@ -20,6 +22,8 @@
 
 #include "resampler.h"
 
+/* How many milliseconds to allow the delay to change before adjusting the
+ * resampling rate. */
 # define RESAMPLER_TOLERANCE_MS 2
 
 struct aplay_resampler {
@@ -38,19 +42,29 @@ struct aplay_resampler {
 	snd_pcm_sframes_t delay_diff;
 };
 
-bool resampler_supports_format(snd_pcm_format_t format) {
+/**
+ * The ALSA audio formats supported as output by the resampler */
+static bool resampler_supports_output_format(snd_pcm_format_t format) {
+	return format == SND_PCM_FORMAT_S16 ||
+		format == SND_PCM_FORMAT_S32 ||
+		format == SND_PCM_FORMAT_FLOAT;
+}
+
+/**
+ * The Bluetooth audio formats supported as input by the resampler */
+bool resampler_supports_input_format(snd_pcm_format_t format) {
 	return format == SND_PCM_FORMAT_S16_LE ||
 		format == SND_PCM_FORMAT_S32_LE ||
-		format == SND_PCM_FORMAT_FLOAT_LE;
+		format == SND_PCM_FORMAT_S24_LE;
 }
 
 void resampler_delete(struct aplay_resampler *resampler) {
 	if (resampler == NULL || resampler->src_state == NULL)
 		return;
 	src_delete(resampler->src_state);
-	if (resampler->in_format != SND_PCM_FORMAT_FLOAT_LE)
+	if (resampler->in_format != SND_PCM_FORMAT_FLOAT)
 		free(resampler->in_buffer);
-	if (resampler->out_format != SND_PCM_FORMAT_FLOAT_LE)
+	if (resampler->out_format != SND_PCM_FORMAT_FLOAT)
 		free(resampler->out_buffer);
 	free(resampler);
 }
@@ -65,7 +79,7 @@ struct aplay_resampler *resampler_create(
 			snd_pcm_uframes_t max_frames) {
 
 	/* Check formats can be resampled */
-	if (!resampler_supports_format(in_format) || !resampler_supports_format(out_format)) {
+	if (!resampler_supports_input_format(in_format) || !resampler_supports_output_format(out_format)) {
 		errno = EINVAL;
 		return NULL;
 	}
@@ -83,13 +97,13 @@ struct aplay_resampler *resampler_create(
 		goto fail;
 	}
 
-	if (in_format != SND_PCM_FORMAT_FLOAT_LE) {
+	if (in_format != SND_PCM_FORMAT_FLOAT) {
 		resampler->in_buffer = calloc(max_frames * channels, sizeof(float));
 		if (resampler->in_buffer == NULL)
 			goto fail;
 	}
 
-	if (out_format != SND_PCM_FORMAT_FLOAT_LE) {
+	if (out_format != SND_PCM_FORMAT_FLOAT) {
 		resampler->out_buffer = calloc(max_frames * channels, sizeof(float));
 		if (resampler->out_buffer == NULL)
 			goto fail;
@@ -116,20 +130,18 @@ int resampler_process(struct aplay_resampler *resampler, ffb_t *in, ffb_t *out) 
 	SRC_DATA *src_data = &resampler->src_data;
 	snd_pcm_uframes_t frames_used = 0;
 
-	// fix input endianness ??
-
 	/* We must ensure that we only process as many samples as will fit into
 	 * the out buffer. */
 	size_t out_samples = ffb_len_in(out);
 	size_t max_in_samples = out_samples / resampler->src_data.src_ratio;
 
 	size_t in_samples = MIN(ffb_len_out(in), max_in_samples);
-	if (resampler->in_format == SND_PCM_FORMAT_S16_LE) {
+	if (resampler->in_format == SND_PCM_FORMAT_S16) {
 		in_samples = MIN(in_samples, resampler->max_frames * resampler->channels);
 		src_short_to_float_array(in->data, resampler->in_buffer, in_samples);
 		src_data->data_in = resampler->in_buffer;
 	}
-	else if (resampler->in_format == SND_PCM_FORMAT_S32_LE) {
+	else if (resampler->in_format == SND_PCM_FORMAT_S32) {
 		in_samples = MIN(in_samples, resampler->max_frames * resampler->channels);
 		src_int_to_float_array(in->data, resampler->in_buffer, in_samples);
 		src_data->data_in = resampler->in_buffer;
@@ -139,7 +151,7 @@ int resampler_process(struct aplay_resampler *resampler, ffb_t *in, ffb_t *out) 
 	}
 	src_data->input_frames = in_samples / resampler->channels;
 
-	if (resampler->out_format == SND_PCM_FORMAT_FLOAT_LE) {
+	if (resampler->out_format == SND_PCM_FORMAT_FLOAT) {
 		src_data->data_out = out->tail;
 		src_data->output_frames = out_samples / resampler->channels;
 	}
@@ -161,23 +173,22 @@ int resampler_process(struct aplay_resampler *resampler, ffb_t *in, ffb_t *out) 
 		frames_used += src_data->input_frames_used;
 		src_data->output_frames -= src_data->output_frames_gen;
 
-		if (resampler->out_format == SND_PCM_FORMAT_S16_LE)
+		if (resampler->out_format == SND_PCM_FORMAT_S16)
 			src_float_to_short_array(resampler->out_buffer, out->tail, src_data->output_frames_gen * resampler->channels);
-		else if (resampler->out_format == SND_PCM_FORMAT_S32_LE)
+		else if (resampler->out_format == SND_PCM_FORMAT_S32)
 			src_float_to_int_array(resampler->out_buffer, out->tail, src_data->output_frames_gen * resampler->channels);
 
 		ffb_seek(out, src_data->output_frames_gen * resampler->channels);
 	}
 	ffb_shift(in, frames_used * resampler->channels);
 
-	// fix output endianness ??
-
 	return error;
 }
 
 /**
- * @return true if the rate ratio was changed.
- */
+ * Change the rate ratio applied by the resampler to adjust for the given new
+ * delay value, always trying to move the delay back towards the target value
+ * @return true if the rate ratio was changed. */
 bool resampler_update_rate_ratio(
 			struct aplay_resampler *resampler,
 			snd_pcm_uframes_t delay) {
@@ -203,6 +214,9 @@ bool resampler_update_rate_ratio(
 	return resampler->src_data.src_ratio != old_ratio;
 }
 
+/**
+ * Reset the resampling ratio and the target delay after any discontinuity in
+ * the stream. */
 void resampler_reset(struct aplay_resampler *resampler, snd_pcm_uframes_t target) {
 	resampler->src_data.src_ratio = resampler->nominal_rate_ratio;
 	resampler->target_delay = target;
@@ -215,3 +229,86 @@ double resampler_current_rate_ratio(struct aplay_resampler *resampler) {
 bool resampler_ready(struct aplay_resampler *resampler) {
 	return resampler->target_delay != 0;
 }
+
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+
+/**
+ * Convert a buffer of little-endian samples to the equivalent native-endian
+ * format. The samples are modified in place. Also pad 24bit samples (packed
+ * into 32bits) to convert them to valid 32-bit samples.
+ * On little-endian hosts this function only modifies 24-bit samples.
+ * @param len the number of **samples** in the buffer
+ * @param format the original format of the samples. */
+void resampler_format_le_to_native(void *buffer, size_t len, snd_pcm_format_t format) {
+	if (format == SND_PCM_FORMAT_S24_LE) {
+		/* Convert to S32 */
+		uint32_t *data = buffer;
+		for (size_t n = 0; n < len; n++) {
+			if (data[n] & 0x00800000)
+				data[n] |= 0xff000000;
+			else
+				data[n] &= 0x00ffffff;
+		}
+	}
+}
+
+#elif __BYTE_ORDER == __BIG_ENDIAN
+#include <byteswap.h>
+
+/**
+ * Convert a buffer of little-endian samples to the equivalent native-endian
+ * format. The samples are modified in place. Also pad 24bit samples (packed
+ * into 32bits) to convert them to valid 32-bit samples.
+ * @param len the number of **samples** in the buffer
+ * @param format the original format of the samples. */
+void resampler_format_le_to_native(void *buffer, size_t len, snd_pcm_format_t format) {
+	size_t n;
+
+	switch (format) {
+	case SND_PCM_FORMAT_S16_LE:
+		uint16_t *data = buffer;
+		for (n = 0; n < len; n++)
+			bswap_16(data[n]);
+		break;
+	case SND_PCM_FORMAT_S24_LE:
+		uint32_t *data = buffer;
+		/* Convert to S32 */
+		for (n = 0; n < len; n++) {
+			if (data[n] & 0x00008000)
+				data[n] |= 0x000000ff;
+			else
+				data[n] &= 0xffffff00;
+			bswap_32(data[n]);
+		}
+		break;
+	case SND_PCM_FORMAT_S32_LE:
+		uint32_t *data = buffer;
+		for (n = 0; n < len; n++)
+			bswap_32(data[n]);
+		break;
+	default:
+		return;
+	}
+}
+
+/**
+ * Return the equivalent supported native-endian format for the given source
+ * format. For unsupported formats the given source format value is returned. */
+snd_pcm_format_t resampler_native_format(snd_pcm_format_t source_format) {
+	switch (source_format) {
+	case SND_PCM_FORMAT_S16_LE:
+		return SND_PCM_FORMAT_S16;
+	case SND_PCM_FORMAT_S24_LE:
+		/* 24bit samples must be converted to 32 bit before passing to
+		 * the resampler */
+		return SND_PCM_FORMAT_S32;
+	case SND_PCM_FORMAT_S32_LE:
+		return SND_PCM_FORMAT_S32;
+	default:
+		return source_format;
+	}
+}
+
+#else
+# error "Unknown byte order"
+#endif

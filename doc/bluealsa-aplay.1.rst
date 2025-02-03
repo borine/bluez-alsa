@@ -213,10 +213,9 @@ OPTIONS
       low so may be better suited to very low power embedded processors.
 
     - **linear** - use the SRC_LINEAR converter; the lowest quality converter
-      of libsamplerate. Output quality and CPU usage are similar to the ALSA
-      rate plugin's own internal linear converter, but this option also
-      performs adaptive resampling which is not possible with the ALSA rate
-      plugin.
+      of libsamplerate. Output quality is similar to the ALSA rate plugin's own
+      internal linear converter, but this option also performs adaptive
+      resampling which is not possible with the ALSA rate plugin.
 
     - **none** - do not perform any resampling; the ALSA PCM device is then
       responsible for rate conversion, and no timer drift adjustment is made.

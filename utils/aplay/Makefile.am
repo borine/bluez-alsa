@@ -16,7 +16,7 @@ bluealsa_aplay_SOURCES = \
 	alsa-mixer.c \
 	alsa-pcm.c \
 	dbus.c \
-	delay-reporting.c \
+	delay-report.c \
 	aplay.c
 
 if ENABLE_APLAY_RESAMPLER

@@ -41,8 +41,10 @@ static int alsa_pcm_set_hw_params(snd_pcm_t *pcm, snd_pcm_format_t format_1,
 		goto fail;
 	}
 
+	/* Prefer format_1 if supported by the device. */
 	if ((err = snd_pcm_hw_params_set_format(pcm, params, format_1)) == 0)
 		format = format_1;
+	/* Otherwise try format 2 */
 	else if (format_2 != SND_PCM_FORMAT_UNKNOWN) {
 		if ((err = snd_pcm_hw_params_set_format(pcm, params, format_2)) == 0)
 			format = format_2;
@@ -175,7 +177,7 @@ int alsa_pcm_open(
 
 	/* Start the transfer when three requested periods have been written (or
 	 * when the buffer is full if it holds less than three requested periods. */
-	snd_pcm_uframes_t start_threshold = (period_time * 3 / 1000) * (rate / 1000);
+	snd_pcm_uframes_t start_threshold = ((snd_pcm_uframes_t)period_time * 3 / 1000) * (rate / 1000);
 	if (start_threshold > buffer_size)
 		start_threshold = buffer_size;
 
@@ -226,7 +228,7 @@ int alsa_pcm_write(struct alsa_pcm *pcm, ffb_t *buffer, bool drain, bool verbose
 	pcm->underrun = false;
 	if ((ret = snd_pcm_avail_delay(pcm->handle, &avail, &delay)) < 0) {
 		if (ret == -EPIPE) {
-			debug("ALSA playback PCM underrun");
+			warn("ALSA playback PCM underrun");
 			pcm->underrun = true;
 			snd_pcm_prepare(pcm->handle);
 			avail = pcm->buffer_frames;
@@ -248,11 +250,11 @@ int alsa_pcm_write(struct alsa_pcm *pcm, ffb_t *buffer, bool drain, bool verbose
 			frames = avail;
 		else if (pcm->buffer_frames - avail + frames < pcm->underrun_threshold &&
 					snd_pcm_state(pcm->handle) == SND_PCM_STATE_RUNNING) {
-			/* Pad the buffer with enough silence to restore it to the start
+			/* Pad the buffer with enough silence to restore it to the underrun
 			 * threshold. */
-			size_t padding = (pcm->start_threshold - frames) * pcm->channels;
+			size_t padding = (pcm->underrun_threshold - frames) * pcm->channels;
 			if (verbose)
-				debug("Underrun imminent: inserting %zu silence frames", padding / pcm->channels);
+				info("Underrun imminent: inserting %zu silence frames", padding / pcm->channels);
 			snd_pcm_format_set_silence(pcm->format, buffer->tail, padding);
 			ffb_seek(buffer, padding);
 			frames = ffb_len_out(buffer) / pcm->channels;
@@ -269,7 +271,7 @@ int alsa_pcm_write(struct alsa_pcm *pcm, ffb_t *buffer, bool drain, bool verbose
 			case EINTR:
 				continue;
 			case EPIPE:
-				debug("ALSA playback PCM underrun");
+				warn("ALSA playback PCM underrun");
 				pcm->underrun = true;
 				snd_pcm_prepare(pcm->handle);
 				continue;

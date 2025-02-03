@@ -21,17 +21,25 @@
 
 struct alsa_pcm {
 	snd_pcm_format_t format;
+	/* The hardware parameters actually set within the ALSA device; note that
+	 * these may differ from the values requested by the application. */
 	int channels;
 	unsigned int rate;
 	unsigned int buffer_time;
 	unsigned int period_time;
 	snd_pcm_uframes_t buffer_frames;
 	snd_pcm_uframes_t period_frames;
+	/* The number of frames that must be written to trigger automatic start of
+	 * the ALSA device. */
 	snd_pcm_uframes_t start_threshold;
 	snd_pcm_uframes_t underrun_threshold;
+	/* The number of bytes in 1 sample. */
 	size_t sample_size;
+	/* The number of bytes in 1 frame. */
 	size_t frame_size;
+	/* The internal delay of the ALSA device immediately after the last write */
 	size_t delay;
+	/* Indicates whether the last write recovered from an underrun. */
 	bool underrun;
 	snd_pcm_t *handle;
 };
