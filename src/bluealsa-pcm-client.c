@@ -46,7 +46,9 @@ static bool bluealsa_pcm_client_is_capture(struct bluealsa_pcm_client *client) {
 
 static size_t bluealsa_pcm_client_playback_init_offset(const struct bluealsa_pcm_client *client) {
 	const struct bluealsa_mix_buffer *buffer = &client->multi->playback_buffer;
-	return (BLUEALSA_MULTI_MIX_THRESHOLD * buffer->period) - (client->in_offset * buffer->channels / buffer->frame_size);
+	const size_t client_samples = client->in_offset * buffer->channels / buffer->frame_size;
+	const size_t mix_threshold_samples = BLUEALSA_MULTI_MIX_THRESHOLD * buffer->period;
+	return mix_threshold_samples > client_samples ? mix_threshold_samples - client_samples : 0;
 }
 
 /**

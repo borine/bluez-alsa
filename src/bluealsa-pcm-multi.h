@@ -21,7 +21,7 @@
 #include "bluealsa-mix-buffer.h"
 
 /* Number of periods to hold in mix before starting playback. */
-#define BLUEALSA_MULTI_MIX_THRESHOLD 2
+#define BLUEALSA_MULTI_MIX_THRESHOLD 3
 
 /* Number of periods to hold in client before starting mix. */
 #define BLUEALSA_MULTI_CLIENT_THRESHOLD 2
