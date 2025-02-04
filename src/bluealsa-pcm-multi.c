@@ -300,6 +300,11 @@ bool bluealsa_pcm_multi_add_client(struct bluealsa_pcm_multi *multi, int pcm_fd,
 	if (multi->thread == config.main_thread && !bluealsa_pcm_multi_start(multi))
 		goto fail;
 
+	if (multi->client_count == 1)
+		/* notify our PCM IO thread that the PCM was opened */
+		ba_transport_pcm_signal_send(multi->pcm, BA_TRANSPORT_PCM_SIGNAL_OPEN);
+
+
 	debug("new client id %zu, total clients now %zu", client->id, multi->client_count);
 	return true;
 

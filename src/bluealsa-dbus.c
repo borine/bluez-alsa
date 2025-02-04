@@ -570,10 +570,10 @@ static void bluealsa_pcm_open(GDBusMethodInvocation *inv, void *userdata) {
 
 		pthread_mutex_unlock(&pcm->mutex);
 
-	}
+		/* notify our PCM IO thread that the PCM was opened */
+		ba_transport_pcm_signal_send(pcm, BA_TRANSPORT_PCM_SIGNAL_OPEN);
 
-	/* notify our PCM IO thread that the PCM was opened */
-	ba_transport_pcm_signal_send(pcm, BA_TRANSPORT_PCM_SIGNAL_OPEN);
+	}
 
 	int fds[2] = { pcm_fds[is_sink ? 1 : 0], pcm_fds[3] };
 	GUnixFDList *fd_list = g_unix_fd_list_new_from_array(fds, 2);
