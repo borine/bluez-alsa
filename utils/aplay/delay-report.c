@@ -44,6 +44,9 @@ void delay_report_reset(
 bool delay_report_update(
 		struct delay_report *dr,
 		struct alsa_pcm *pcm,
+#if ENABLE_APLAY_RESAMPLER
+		size_t resample_delay_frames,
+#endif
 		int ba_pcm_fd,
 		ffb_t *buffer,
 		DBusError *err) {
@@ -59,6 +62,9 @@ bool delay_report_update(
 	const size_t num_values = ARRAYSIZE(dr->values);
 	/* Store the delay calculated from all components. */
 	dr->values[dr->values_i % num_values] = pcm->delay + ba_pcm_frames + buffer_frames;
+#if ENABLE_APLAY_RESAMPLER
+	dr->values[dr->values_i % num_values] += resample_delay_frames;
+#endif
 	dr->values_i++;
 
 	struct timespec ts_now;

@@ -121,7 +121,7 @@ static int alsa_pcm_set_sw_params(
 
 	snd_pcm_sw_params_alloca(&params);
 
-	if ((err = snd_pcm_sw_params_current(pcm, params)) != 0) {
+	if ((err = snd_pcm_sw_params_current(snd_pcm, params)) != 0) {
 		snprintf(buf, sizeof(buf), "Get current sw params: %s", snd_strerror(err));
 		goto fail;
 	}
@@ -131,7 +131,7 @@ static int alsa_pcm_set_sw_params(
 		goto fail;
 	}
 
-	if ((err = snd_pcm_sw_params(pcm, params)) != 0) {
+	if ((err = snd_pcm_sw_params(snd_pcm, params)) != 0) {
 		snprintf(buf, sizeof(buf), "Set sw params: %s", snd_strerror(err));
 		goto fail;
 	}
@@ -175,7 +175,7 @@ int alsa_pcm_open(
 	}
 
 	pcm->format = actual_format;
-	if ((err = alsa_pcm_set_hw_params(pcm->pcm, format_1, format_2,
+	if ((err = alsa_pcm_set_hw_params(pcm, format_1, format_2,
 				&actual_format, channels, &actual_rate, exact_rate,
 				&actual_buffer_time, &actual_period_time, &tmp)) != 0) {
 		snprintf(buf, sizeof(buf), "Set HW params: %s", tmp);
@@ -195,7 +195,7 @@ int alsa_pcm_open(
 	if (start_threshold > buffer_size)
 		start_threshold = buffer_size;
 
-	if ((err = alsa_pcm_set_sw_params(pcm->pcm, start_threshold, &tmp)) != 0) {
+	if ((err = alsa_pcm_set_sw_params(pcm, start_threshold, &tmp)) != 0) {
 		snprintf(buf, sizeof(buf), "Set SW params: %s", tmp);
 		goto fail;
 	}

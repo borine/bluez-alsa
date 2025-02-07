@@ -807,8 +807,6 @@ static void *io_worker_routine(struct io_worker *w) {
 		if (!w->ba_pcm.running)
 			goto device_inactive;
 
-		size_t delay_frames = w->alsa_pcm.delay;
-
 		if (w->alsa_pcm.underrun) {
 			/* Reset moving delay window buffer. */
 			delay_report_reset(&dr);
@@ -819,12 +817,17 @@ static void *io_worker_routine(struct io_worker *w) {
 			if (w->alsa_pcm.underrun)
 				resampler_reset(resampler, 0);
 
-			delay_frames += ffb_len_out(write_buffer) / w->ba_pcm.channels;
-			delay_frames /= resampler_current_rate_ratio(resampler);
+			size_t resample_delay_frames;
+			resample_delay_frames = ffb_len_out(write_buffer) / w->ba_pcm.channels;
+			resample_delay_frames /= resampler_current_rate_ratio(resampler);
 		}
 #endif
 
-		if (!delay_report_update(&dr, &w->alsa_pcm, w->ba_pcm_fd, &read_buffer, &err)) {
+		if (!delay_report_update(&dr, &w->alsa_pcm,
+#if ENABLE_APLAY_RESAMPLER
+				resample_delay_frames,
+#endif
+				w->ba_pcm_fd, &read_buffer, &err)) {
 			error("Couldn't update BlueALSA PCM client delay: %s", err.message);
 			dbus_error_free(&err);
 			goto fail;
