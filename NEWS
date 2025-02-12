@@ -8,6 +8,7 @@ unreleased
 - channel map and volume control for surround sound (5.1, 7.1) audio
 - native A2DP volume control by default (dropped --a2dp-volume option)
 - fix configuration for Android 13 A2DP Opus codec
+- support multiple client connections to each Bluetooth PCM
 
 bluez-alsa v4.3.1 (2024-08-30)
 ==============================
