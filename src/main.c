@@ -1,6 +1,6 @@
 /*
  * BlueALSA - main.c
- * Copyright (c) 2016-2024 Arkadiusz Bokowy
+ * Copyright (c) 2016-2025 Arkadiusz Bokowy
  *
  * This file is a part of bluez-alsa.
  *
@@ -154,7 +154,7 @@ static void g_bus_name_lost(GDBusConnection *conn, const char *name, void *userd
 int main(int argc, char **argv) {
 
 	int opt;
-	static const char *opts = "hVSB:i:p:c:";
+	static const char *opts = "hVSB:Mi:p:c:";
 	static const struct option longopts[] = {
 		{ "help", no_argument, NULL, 'h' },
 		{ "version", no_argument, NULL, 'V' },
@@ -162,6 +162,7 @@ int main(int argc, char **argv) {
 		{ "loglevel", required_argument, NULL, 23 },
 		{ "dbus", required_argument, NULL, 'B' },
 		{ "device", required_argument, NULL, 'i' },
+		{ "multi-client", no_argument, NULL, 'M' },
 		{ "profile", required_argument, NULL, 'p' },
 		{ "codec", required_argument, NULL, 'c' },
 		{ "all-codecs", no_argument, NULL, 25 },
@@ -233,6 +234,7 @@ int main(int argc, char **argv) {
 					"  --loglevel=LEVEL\t\tminimum message priority\n"
 					"  -B, --dbus=NAME\t\tD-Bus service name suffix\n"
 					"  -i, --device=hciX\t\tHCI device(s) to use\n"
+					"  -M, --multi-client\t\tpermit multiple clients for each transport PCM\n"
 					"  -p, --profile=NAME\t\tset enabled BT profiles\n"
 					"  -c, --codec=NAME\t\tset enabled BT audio codecs\n"
 					"  --all-codecs\t\t\tenable all available BT audio codecs\n"
@@ -350,6 +352,10 @@ int main(int argc, char **argv) {
 
 		case 'i' /* --device=HCI */ :
 			g_array_append_val(config.hci_filter, optarg);
+			break;
+
+		case 'M' /* --multi-client */ :
+			config.multi_enabled = true;
 			break;
 
 		case 'p' /* --profile=NAME */ : {

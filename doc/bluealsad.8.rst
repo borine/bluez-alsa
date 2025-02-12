@@ -6,7 +6,7 @@ bluealsad
 Bluetooth Audio ALSA Backend
 ----------------------------
 
-:Date: December 2024
+:Date: February 2025
 :Manual section: 8
 :Manual group: System Manager's Manual
 :Version: $VERSION$
@@ -57,6 +57,13 @@ OPTIONS
     BlueALSA D-Bus service name suffix.
     Without this option, **bluealsad** registers itself as an "org.bluealsa"
     D-Bus service.  For more information see the EXAMPLES_ below.
+
+-M, --multi-client
+    Permit multiple clients to connect to the same PCM stream.
+    Without this option, only one client can connect to a PCM.
+    With this option, for playback clients, the streams are mixed together;
+    for capture each client receives a copy of the stream. See
+    `Multiple clients`_ in the **NOTES** section below for more information.
 
 -i hciX, --device=hciX
     HCI device to use. Can be specified multiple times to select more than one
@@ -423,6 +430,29 @@ here. It is recommended to use BlueZ release 5.65 or later to be certain that
 native A2DP volume control will always be available with those devices which
 provide it.
 
+Multiple clients
+----------------
+
+Enabling the option ``--multi-client`` imposes certain limitations:
+
+- *Playback volume* - mixing multiple streams can overflow the PCM sample bit
+  depth, resulting in clipping of samples. When a PCM is running in its
+  (default) native volume control mode **bluealsad** reduces the risk of
+  clipping by attenuating the volume of the mixed samples before sending them
+  to the encoder. When software volume control is enabled this automatic
+  attenuation is not applied, and instead the user should use the PCM volume
+  control to reduce volume if necessary.
+- *Playback delay* - mixing streams requires additional buffering, which
+  increases the overall delay of the stream. The delay value reported to
+  applications is also less accurate because the client applications are not
+  synchronized and therefore their actual delay will vary slightly from the
+  reported value. This variance is small and is normally within the error
+  acceptable to watching videos, etc.
+- *Security* - in multi-user environments it is possible for two users to open
+  the same PCM, and this makes it rather trivial for one user to snoop on the
+  conversations of another. For this reason use of the ``--multi-client``
+  option is not recommended on such systems.
+
 FILES
 =====
 
@@ -477,7 +507,7 @@ Please add following lines to the BlueALSA D-Bus policy:
 COPYRIGHT
 =========
 
-Copyright (c) 2016-2024 Arkadiusz Bokowy.
+Copyright (c) 2016-2025 Arkadiusz Bokowy.
 
 The bluez-alsa project is licensed under the terms of the MIT license.
 
