@@ -813,11 +813,11 @@ static void *io_worker_routine(struct io_worker *w) {
 		}
 
 #if ENABLE_APLAY_RESAMPLER
+		size_t resample_delay_frames;
 		if (use_resampler) {
 			if (w->alsa_pcm.underrun)
 				resampler_reset(resampler, 0);
 
-			size_t resample_delay_frames;
 			resample_delay_frames = ffb_len_out(write_buffer) / w->ba_pcm.channels;
 			resample_delay_frames /= resampler_current_rate_ratio(resampler);
 		}
