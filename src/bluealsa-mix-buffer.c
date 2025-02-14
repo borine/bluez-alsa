@@ -68,8 +68,7 @@ int bluealsa_mix_buffer_init(struct bluealsa_mix_buffer *buffer,
 				size_t buffer_frames, size_t period_frames) {
 	buffer->format = format;
 	buffer->channels = channels;
-	/* We allow for 1 extra empty frame in the buffer. */
-	buffer->size = (1 + buffer_frames) * channels;
+	buffer->size = buffer_frames * channels;
 	buffer->period = period_frames * channels;
 	buffer->mix_offset = 0;
 	buffer->end = 0;
@@ -174,7 +173,7 @@ size_t bluealsa_mix_buffer_add(struct bluealsa_mix_buffer *buffer, intmax_t *off
 	}
 
 	start = *offset;
-	if (start > buffer->size)
+	if (start >= buffer->size)
 		start %= buffer->size;
 
 	if (start < mix_offset)

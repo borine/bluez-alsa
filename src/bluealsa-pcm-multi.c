@@ -136,7 +136,7 @@ bool bluealsa_pcm_multi_enabled(const struct ba_transport *t) {
  * number of unread frames in the mix buffer plus a constant value
  * approximating the "typical" number of frames held in a client read buffer. */
 int bluealsa_pcm_multi_delay_get(const struct bluealsa_pcm_multi *multi) {
-	if (!bluealsa_pcm_multi_is_playback(multi))
+	if (!bluealsa_pcm_multi_is_playback(multi) || !multi->period_frames)
 		return 0;
 	int delay = ((bluealsa_mix_buffer_delay(&multi->playback_buffer, multi->playback_buffer.end) / multi->pcm->channels)  + (BLUEALSA_MULTI_CLIENT_THRESHOLD * multi->period_frames)) * 100 / multi->pcm->rate;
 	return delay;
