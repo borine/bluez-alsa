@@ -155,9 +155,11 @@ bool bluealsa_mix_buffer_at_threshold(struct bluealsa_mix_buffer *buffer) {
  *         a whole number of frames. */
 size_t bluealsa_mix_buffer_add(struct bluealsa_mix_buffer *buffer, intmax_t *offset, const void *data, size_t bytes) {
 
-	size_t mix_offset = buffer->mix_offset;
-	size_t avail = bluealsa_mix_buffer_calc_avail(buffer, mix_offset, buffer->end);
 	size_t start;
+	size_t mix_offset = buffer->mix_offset;
+	/* Save the initial buffer fill level so that we can detect if this
+	 * addition has increased it. */
+	size_t avail = bluealsa_mix_buffer_calc_avail(buffer, mix_offset, buffer->end);
 
 	/* Only allow complete frames into the mix. */
 	size_t frames = bytes / buffer->frame_size;
@@ -172,6 +174,9 @@ size_t bluealsa_mix_buffer_add(struct bluealsa_mix_buffer *buffer, intmax_t *off
 	}
 
 	start = *offset;
+	if (start > buffer->size)
+		start %= buffer->size;
+
 	if (start < mix_offset)
 		start += buffer->size;
 
@@ -212,7 +217,10 @@ size_t bluealsa_mix_buffer_add(struct bluealsa_mix_buffer *buffer, intmax_t *off
 		}
 	}
 
-	*offset = start + samples;
+	start += samples;
+	if (start >= buffer->size)
+		start -= buffer->size;
+	*offset = start;
 
 	/* If this addition has increased the number of available frames, update
 	 * the end pointer. */
@@ -237,6 +245,7 @@ size_t bluealsa_mix_buffer_read(struct bluealsa_mix_buffer *buffer, void *data, 
 
 	size_t start = buffer->mix_offset;
 	size_t end = buffer->end;
+	/* Only process complete frames */
 	samples -= samples % buffer->channels;
 
 	/* Limit each read to 1 period. */
@@ -342,7 +351,10 @@ size_t bluealsa_mix_buffer_read(struct bluealsa_mix_buffer *buffer, void *data, 
 		}
 	}
 
-	buffer->mix_offset = start + n;
+	start += n;
+	if (start >= buffer->size)
+		start -= buffer->size;
+	buffer->mix_offset = start;
 
 	return samples;
 }
