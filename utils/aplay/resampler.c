@@ -197,12 +197,15 @@ bool resampler_update_rate_ratio(
 		return false;
 
 	double old_ratio = resampler->src_data.src_ratio;
+	bool rate_changed = true;
 	snd_pcm_sframes_t delay_diff = delay - resampler->target_delay;
 	if (labs(delay_diff) > resampler->delay_tolerance) {
 		if (delay_diff > 0 && delay_diff >= resampler->delay_diff)
 			resampler->src_data.src_ratio -= resampler->rate_delta;
 		else if (delay_diff < 0 && delay_diff <= resampler->delay_diff)
 			resampler->src_data.src_ratio += resampler->rate_delta;
+		else
+			rate_changed = false
 	}
 	else if (labs(resampler->delay_diff) > resampler->delay_tolerance) {
 		if (resampler->delay_diff > 0)
@@ -210,8 +213,11 @@ bool resampler_update_rate_ratio(
 		else
 			resampler->src_data.src_ratio -= resampler->rate_delta;
 	}
+	else
+		rate_changed = false;
+
 	resampler->delay_diff = delay_diff;
-	return resampler->src_data.src_ratio != old_ratio;
+	return rate_changed;
 }
 
 /**
