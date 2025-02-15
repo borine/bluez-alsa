@@ -19,12 +19,17 @@
 
 #include "shared/log.h"
 #include "shared/ffb.h"
+#include "shared/rt.h"
 
 #include "resampler.h"
 
 /* How many milliseconds to allow the delay to change before adjusting the
  * resampling rate. */
 # define RESAMPLER_TOLERANCE_MS 2
+
+/* How many milliseconds to wait for the delay value to stabilize after a
+ * reset. */
+#define RESAMPLER_STABILIZE_MS 2000
 
 struct aplay_resampler {
 	SRC_STATE *src_state;
@@ -40,6 +45,12 @@ struct aplay_resampler {
 	snd_pcm_uframes_t target_delay;
 	snd_pcm_uframes_t delay_tolerance;
 	snd_pcm_sframes_t delay_diff;
+	struct timespec reset_ts;
+};
+
+static const struct timespec ts_stabilize = {
+	.tv_sec = RESAMPLER_STABILIZE_MS / 1000,
+	.tv_nsec = (RESAMPLER_STABILIZE_MS % 1000) * 1000000,
 };
 
 /**
@@ -193,10 +204,20 @@ bool resampler_update_rate_ratio(
 			struct aplay_resampler *resampler,
 			snd_pcm_uframes_t delay) {
 
-	if (resampler->target_delay == 0)
-		return false;
+	/* Check if we need to re-enable adaptive resampling after a reset */
+	if (resampler->target_delay == 0) {
+		struct timespec ts_now;
+		struct timespec ts_wait;
+		timespecadd(&resampler->reset_ts, &ts_stabilize, &ts_wait);
+		gettimestamp(&ts_now);
+		if (difftimespec(&ts_now, &ts_wait, &ts_wait) < 0) {
+			resampler->target_delay = delay;
+			return true;
+		}
+		else
+			return false;
+	}
 
-	double old_ratio = resampler->src_data.src_ratio;
 	bool rate_changed = true;
 	snd_pcm_sframes_t delay_diff = delay - resampler->target_delay;
 	if (labs(delay_diff) > resampler->delay_tolerance) {
@@ -205,7 +226,7 @@ bool resampler_update_rate_ratio(
 		else if (delay_diff < 0 && delay_diff <= resampler->delay_diff)
 			resampler->src_data.src_ratio += resampler->rate_delta;
 		else
-			rate_changed = false
+			rate_changed = false;
 	}
 	else if (labs(resampler->delay_diff) > resampler->delay_tolerance) {
 		if (resampler->delay_diff > 0)
@@ -221,11 +242,12 @@ bool resampler_update_rate_ratio(
 }
 
 /**
- * Reset the resampling ratio and the target delay after any discontinuity in
+ * Reset the resampling ratio to its nominal rate after any discontinuity in
  * the stream. */
-void resampler_reset(struct aplay_resampler *resampler, snd_pcm_uframes_t target) {
+void resampler_reset(struct aplay_resampler *resampler) {
 	resampler->src_data.src_ratio = resampler->nominal_rate_ratio;
-	resampler->target_delay = target;
+	resampler->target_delay = 0;
+	gettimestamp(&resampler->reset_ts);
 }
 
 double resampler_current_rate_ratio(struct aplay_resampler *resampler) {

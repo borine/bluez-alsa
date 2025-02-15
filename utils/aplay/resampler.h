@@ -48,7 +48,7 @@ bool resampler_update_rate_ratio(
 			struct aplay_resampler *resampler,
 			snd_pcm_uframes_t delay);
 
-void resampler_reset(struct aplay_resampler *resampler, snd_pcm_uframes_t target);
+void resampler_reset(struct aplay_resampler *resampler);
 double resampler_current_rate_ratio(struct aplay_resampler *resampler);
 bool resampler_ready(struct aplay_resampler *resampler);
 

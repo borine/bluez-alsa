@@ -599,7 +599,7 @@ static void *io_worker_routine(struct io_worker *w) {
 				ffb_shift(&read_buffer, discard_samples);
 #if ENABLE_APLAY_RESAMPLER
 				if (use_resampler)
-					resampler_reset(resampler, 0);
+					resampler_reset(resampler);
 #endif
 			}
 
@@ -760,6 +760,12 @@ static void *io_worker_routine(struct io_worker *w) {
 			/* Reset moving delay window buffer. */
 			delay_report_reset(&dr);
 
+#if ENABLE_APLAY_RESAMPLER
+			/* Start the resampler stabilization timer */
+			if (use_resampler)
+				resampler_reset(resampler);
+#endif
+
 			if (verbose >= 2) {
 				info("Used configuration for %s:\n"
 						"  ALSA PCM buffer time: %u us (%zu bytes)\n"
@@ -807,16 +813,11 @@ static void *io_worker_routine(struct io_worker *w) {
 		if (!w->ba_pcm.running)
 			goto device_inactive;
 
-		if (w->alsa_pcm.underrun) {
-			/* Reset moving delay window buffer. */
-			delay_report_reset(&dr);
-		}
-
 #if ENABLE_APLAY_RESAMPLER
 		size_t resample_delay_frames;
 		if (use_resampler) {
 			if (w->alsa_pcm.underrun)
-				resampler_reset(resampler, 0);
+				resampler_reset(resampler);
 
 			resample_delay_frames = ffb_len_out(write_buffer) / w->ba_pcm.channels;
 			resample_delay_frames /= resampler_current_rate_ratio(resampler);
@@ -834,18 +835,10 @@ static void *io_worker_routine(struct io_worker *w) {
 		}
 
 #if ENABLE_APLAY_RESAMPLER
-		/* Allow time for the delay average to settle before adjusting the
-		 * resampling ratio */
-		if (use_resampler && dr.values_i > 2 * ARRAYSIZE(dr.values)) {
-			if (!resampler_ready(resampler)) {
-				if (alsa_pcm_is_running(&w->alsa_pcm))
-					resampler_reset(resampler, dr.avg_value);
-			}
-			else {
-				bool rate_changed = resampler_update_rate_ratio(resampler, dr.avg_value);
-				if (verbose >= 5 && rate_changed)
-					debug("new rate ratio %.8f", resampler_current_rate_ratio(resampler));
-			}
+		if (use_resampler) {
+			bool rate_changed = resampler_update_rate_ratio(resampler, dr.avg_value);
+			if (verbose >= 5 && rate_changed)
+				debug("new rate ratio %.8f", resampler_current_rate_ratio(resampler));
 		}
 #endif
 
