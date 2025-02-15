@@ -18,8 +18,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-/* IWYU pragma: no_include "config.h" */
-#include "bluealsa-mix-buffer.h"
+#include "ba-pcm-mix-buffer.h"
 
 /* Number of periods to hold in mix before starting playback. */
 #define BLUEALSA_MULTI_MIX_THRESHOLD 4
@@ -31,7 +30,7 @@
 struct ba_transport;
 struct ba_transport_pcm;
 
-enum bluealsa_pcm_multi_state {
+enum ba_pcm_multi_state {
 	BLUEALSA_PCM_MULTI_STATE_INIT = 0,
 	BLUEALSA_PCM_MULTI_STATE_RUNNING,
 	BLUEALSA_PCM_MULTI_STATE_PAUSED,
@@ -56,7 +55,7 @@ struct bluealsa_pcm_multi {
 	size_t client_count;
 	/* The number of clients actively transferring audio */
 	size_t active_count;
-	_Atomic enum bluealsa_pcm_multi_state state;
+	_Atomic enum ba_pcm_multi_state state;
 	int epoll_fd;
 	int event_fd;
 	pthread_t thread;
@@ -74,24 +73,24 @@ struct bluealsa_pcm_multi {
 #endif
 };
 
-bool bluealsa_pcm_multi_enabled(const struct ba_transport *t);
+bool ba_pcm_multi_enabled(const struct ba_transport *t);
 
-struct bluealsa_pcm_multi *bluealsa_pcm_multi_create(struct ba_transport_pcm *pcm);
+struct bluealsa_pcm_multi *ba_pcm_multi_create(struct ba_transport_pcm *pcm);
 
-bool bluealsa_pcm_multi_init(struct bluealsa_pcm_multi *multi);
+bool ba_pcm_multi_init(struct bluealsa_pcm_multi *multi);
 
-void bluealsa_pcm_multi_reset(struct bluealsa_pcm_multi *multi);
+void ba_pcm_multi_reset(struct bluealsa_pcm_multi *multi);
 
-void bluealsa_pcm_multi_free(struct bluealsa_pcm_multi *multi);
+void ba_pcm_multi_free(struct bluealsa_pcm_multi *multi);
 
-bool bluealsa_pcm_multi_add_client(struct bluealsa_pcm_multi *multi, int pcm_fd, int control_fd);
+bool ba_pcm_multi_add_client(struct bluealsa_pcm_multi *multi, int pcm_fd, int control_fd);
 
-ssize_t bluealsa_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t samples);
+ssize_t ba_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t samples);
 
-ssize_t bluealsa_pcm_multi_write(struct bluealsa_pcm_multi *multi, const void *buffer, size_t samples);
+ssize_t ba_pcm_multi_write(struct bluealsa_pcm_multi *multi, const void *buffer, size_t samples);
 
-ssize_t bluealsa_pcm_multi_fetch(struct bluealsa_pcm_multi *multi, void *buffer, size_t samples, bool *restarted);
+ssize_t ba_pcm_multi_fetch(struct bluealsa_pcm_multi *multi, void *buffer, size_t samples, bool *restarted);
 
-int bluealsa_pcm_multi_delay_get(const struct bluealsa_pcm_multi *multi);
+int ba_pcm_multi_delay_get(const struct bluealsa_pcm_multi *multi);
 
 #endif /* BLUEALSA_PCM_MULTI_H */

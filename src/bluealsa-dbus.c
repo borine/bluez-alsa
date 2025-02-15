@@ -36,10 +36,10 @@
 #include "ba-adapter.h"
 #include "ba-config.h"
 #include "ba-device.h"
+#include "ba-pcm-multi.h"
 #include "ba-transport.h"
 #include "ba-transport-pcm.h"
 #include "bluealsa-iface.h"
-#include "bluealsa-pcm-multi.h"
 #include "bluez.h"
 #include "dbus.h"
 #include "hfp.h"
@@ -547,7 +547,7 @@ static void bluealsa_pcm_open(GDBusMethodInvocation *inv, void *userdata) {
 	 * Otherwise control channels are managed in this thread. */
 	if (pcm->multi) {
 		/* create new multi client instance */
-		if (!bluealsa_pcm_multi_add_client(pcm->multi, pcm_fds[is_sink ? 0 : 1], pcm_fds[2]))
+		if (!ba_pcm_multi_add_client(pcm->multi, pcm_fds[is_sink ? 0 : 1], pcm_fds[2]))
 			goto fail;
 	}
 	else {

@@ -22,8 +22,8 @@
 #include <glib.h>
 
 #include "audio.h"
-#include "bluealsa-pcm-multi.h"
 #include "ba-config.h"
+#include "ba-pcm-multi.h"
 #include "shared/defs.h"
 #include "shared/ffb.h"
 #include "shared/log.h"
@@ -238,7 +238,7 @@ ssize_t io_pcm_read(
 		void *buffer,
 		size_t samples) {
 	if (pcm->multi)
-		return bluealsa_pcm_multi_read(pcm->multi, buffer, samples);
+		return ba_pcm_multi_read(pcm->multi, buffer, samples);
 	else
 		return io_pcm_single_read(pcm, buffer, samples);
 }
@@ -311,7 +311,7 @@ ssize_t io_pcm_write(
 	if (pcm->multi == NULL)
 		return io_pcm_single_write(pcm, buffer, samples);
 	else
-		return bluealsa_pcm_multi_write(pcm->multi, buffer, samples);
+		return ba_pcm_multi_write(pcm->multi, buffer, samples);
 }
 
 /**
