@@ -102,7 +102,6 @@ int transport_pcm_init(
 
 	if (ba_pcm_multi_enabled(t))
 		pcm->multi = ba_pcm_multi_create(pcm);
-	
 
 	return 0;
 }

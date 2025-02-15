@@ -20,12 +20,19 @@
 #include "config.h"
 
 enum ba_pcm_client_state {
+	/* client is registered, but not yet initialized */
 	BLUEALSA_PCM_CLIENT_STATE_INIT = 0,
+	/* client is initialized, but not active */
 	BLUEALSA_PCM_CLIENT_STATE_IDLE,
+	/* client is transferring audio frames */
 	BLUEALSA_PCM_CLIENT_STATE_RUNNING,
+	/* client has sent PAUSE command, waiting for RESUME */
 	BLUEALSA_PCM_CLIENT_STATE_PAUSED,
+	/* client has sent DRAIN command, processing frames remaining in the pipe */
 	BLUEALSA_PCM_CLIENT_STATE_DRAINING1,
+	/* pipe is drained, waiting on timeout before returning to IDLE */
 	BLUEALSA_PCM_CLIENT_STATE_DRAINING2,
+	/* client has closed pipe and/or control socket */
 	BLUEALSA_PCM_CLIENT_STATE_FINISHED,
 };
 
@@ -52,7 +59,7 @@ struct bluealsa_pcm_client {
 	uint8_t *buffer;
 	size_t buffer_size;
 	size_t in_offset;
-	ssize_t out_offset;
+	intmax_t out_offset;
 	size_t drain_avail;
 	bool drop;
 	bool watch;
