@@ -760,12 +760,6 @@ static void *io_worker_routine(struct io_worker *w) {
 			/* Reset moving delay window buffer. */
 			delay_report_reset(&dr);
 
-#if ENABLE_APLAY_RESAMPLER
-			/* Start the resampler stabilization timer */
-			if (use_resampler)
-				resampler_reset(resampler);
-#endif
-
 			if (verbose >= 2) {
 				info("Used configuration for %s:\n"
 						"  ALSA PCM buffer time: %u us (%zu bytes)\n"
@@ -816,7 +810,7 @@ static void *io_worker_routine(struct io_worker *w) {
 #if ENABLE_APLAY_RESAMPLER
 		size_t resample_delay_frames;
 		if (use_resampler) {
-			if (w->alsa_pcm.underrun)
+			if (!alsa_pcm_is_running(&w->alsa_pcm) || w->alsa_pcm.underrun)
 				resampler_reset(resampler);
 
 			resample_delay_frames = ffb_len_out(write_buffer) / w->ba_pcm.channels;
@@ -835,7 +829,7 @@ static void *io_worker_routine(struct io_worker *w) {
 		}
 
 #if ENABLE_APLAY_RESAMPLER
-		if (use_resampler) {
+		if (use_resampler && alsa_pcm_is_running(&w->alsa_pcm)) {
 			bool rate_changed = resampler_update_rate_ratio(resampler, dr.avg_value);
 			if (verbose >= 5 && rate_changed)
 				debug("new rate ratio %.8f", resampler_current_rate_ratio(resampler));
