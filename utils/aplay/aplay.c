@@ -601,8 +601,8 @@ static void *io_worker_routine(struct io_worker *w) {
 #if ENABLE_APLAY_RESAMPLER
 					if (use_resampler)
 						resampler_reset(resampler);
-				}
 #endif
+				}
 			}
 
 			ssize_t ret;
