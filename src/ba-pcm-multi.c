@@ -464,12 +464,13 @@ static void ba_pcm_multi_update_mix(struct bluealsa_pcm_multi *multi) {
 	}
 }
 
-static void ba_pcm_multi_stop_if_no_clients(struct bluealsa_pcm_multi *multi) {
+/**
+ * Inform the io thread that the last client has closed its connection. */
+static void ba_pcm_multi_close(struct bluealsa_pcm_multi *multi) {
 	pthread_mutex_lock(&multi->pcm->mutex);
 	ba_transport_pcm_release(multi->pcm);
-	ba_transport_pcm_signal_send(multi->pcm, BA_TRANSPORT_PCM_SIGNAL_CLOSE);
 	pthread_mutex_unlock(&multi->pcm->mutex);
-	ba_transport_stop_if_no_clients(multi->pcm->t);
+	ba_transport_pcm_signal_send(multi->pcm, BA_TRANSPORT_PCM_SIGNAL_CLOSE);
 }
 
 /**
@@ -537,7 +538,7 @@ static void *bluealsa_pcm_mix_thread_func(struct bluealsa_pcm_multi *multi) {
 		if (multi->client_count == 0) {
 			multi->state = BLUEALSA_PCM_MULTI_STATE_FINISHED;
 			ba_pcm_mix_buffer_clear(&multi->playback_buffer);
-			ba_pcm_multi_stop_if_no_clients(multi);
+			ba_pcm_multi_close(multi);
 			continue;
 		}
 
@@ -638,7 +639,7 @@ static void *bluealsa_pcm_snoop_thread_func(struct bluealsa_pcm_multi *multi) {
 					ba_pcm_multi_remove_client(multi, cevent->client);
 					if (multi->client_count == 0) {
 						multi->state = BLUEALSA_PCM_MULTI_STATE_FINISHED;
-						ba_pcm_multi_stop_if_no_clients(multi);
+						ba_pcm_multi_close(multi);
 					}
 					pthread_mutex_unlock(&multi->client_mutex);
 
