@@ -78,6 +78,9 @@ struct ba_config {
 	/* Is multi client support enabled? */
 	bool multi_enabled;
 
+	/* multi client native volume attenuation */
+	double multi_native_volume;
+
 	struct {
 
 		/* available HFP codecs */

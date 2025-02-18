@@ -411,10 +411,13 @@ ssize_t ba_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t
 		}
 		else {
 			for (unsigned i = 0; i < multi->pcm->channels; ++i)
+				/* For pass-through volume control, we silence the samples if
+				 * mute is enabled, otherwise we apply the configured mix
+				 * attenuation. */
 				if (multi->pcm->volume[i].scale == 0)
 					scale_array[i] = 0;
 				else
-					scale_array[i] = 0.75;
+					scale_array[i] = config.multi_native_volume;
 		}
 		ret = ba_pcm_mix_buffer_read(&multi->playback_buffer, buffer, samples, scale_array);
 		if (ret == 0) {

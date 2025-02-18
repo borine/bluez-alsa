@@ -97,6 +97,13 @@ OPTIONS
     For the list of supported audio codecs see the "Available BT audio codecs"
     section of the **bluealsad** command-line help message.
 
+--multi-attenuation=NUM
+    Reduce the amplitude of mixed streams in multi-client mode by a fixed
+    percentage *NUM* to reduce the risk of clipping. *NUM* must be an integer
+    in the range from **0** to **99**. This option is effective only when the
+    option ``--multi-client`` is given. See `Multiple clients`_ in the
+    **NOTES** section below for more information.
+
 --all-codecs
     Enable all available Bluetooth audio codecs.
     This option is equivalent to enabling all available audio codecs by
@@ -437,21 +444,27 @@ Enabling the option ``--multi-client`` imposes certain limitations:
 
 - *Playback volume* - mixing multiple streams can overflow the PCM sample bit
   depth, resulting in clipping of samples. When a PCM is running in its
-  (default) native volume control mode **bluealsad** reduces the risk of
-  clipping by attenuating the volume of the mixed samples before sending them
-  to the encoder. When software volume control is enabled this automatic
-  attenuation is not applied, and instead the user should use the PCM volume
-  control to reduce volume if necessary.
-- *Playback delay* - mixing streams requires additional buffering, which
-  increases the overall delay of the stream. The delay value reported to
+  (default) native volume control mode **bluealsad** can reduce the risk of
+  clipping by attenuating the mixed stream before encoding it. To enable this
+  feature, use the option ``--multi-attenuation`` to apply a fixed percentage
+  attenuation to the mixed PCM samples. The value given must be an integer
+  percentage in the range [0 - 99]; higher values result in greater protection
+  from clipping but also reduce the output volume. When software volume
+  control is enabled for the PCM then this attenuation is not applied, and
+  instead the user should use the BlueALSA PCM volume control to reduce volume
+  if necessary. The software volume adjustment is applied before encoding and
+  therefore has the same effect as the native volume attenuation.
+- *Playback delay* - mixing streams requires additional buffering, which may
+  increase the overall delay of the stream. The delay value reported to
   applications is also less accurate because the client applications are not
   synchronized and therefore their actual delay will vary slightly from the
   reported value. This variance is small and is normally within the error
   acceptable to watching videos, etc.
 - *Security* - in multi-user environments it is possible for two users to open
   the same PCM, and this makes it rather trivial for one user to snoop on the
-  conversations of another. For this reason use of the ``--multi-client``
-  option is not recommended on such systems.
+  incoming streams of another. For this reason use of the ``--multi-client``
+  option is not recommended on such systems if they are used for voice
+  communications.
 
 FILES
 =====

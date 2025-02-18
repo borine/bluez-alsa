@@ -167,6 +167,7 @@ int main(int argc, char **argv) {
 		{ "codec", required_argument, NULL, 'c' },
 		{ "all-codecs", no_argument, NULL, 25 },
 		{ "initial-volume", required_argument, NULL, 17 },
+		{ "multi-attenuation", required_argument, NULL, 26 },
 		{ "keep-alive", required_argument, NULL, 8 },
 		{ "io-rt-priority", required_argument, NULL, 3 },
 		{ "disable-realtek-usb-fix", no_argument, NULL, 21 },
@@ -239,6 +240,7 @@ int main(int argc, char **argv) {
 					"  -c, --codec=NAME\t\tset enabled BT audio codecs\n"
 					"  --all-codecs\t\t\tenable all available BT audio codecs\n"
 					"  --initial-volume=NUM\t\tinitial volume level [0-100]\n"
+					"  --multi-attenuation=NUM\tattenuate mix pass-through volume [0-99]\n"
 					"  --keep-alive=SEC\t\tkeep Bluetooth transport alive\n"
 					"  --io-rt-priority=NUM\t\treal-time priority for IO threads\n"
 					"  --disable-realtek-usb-fix\tdisable fix for mSBC on Realtek USB\n"
@@ -443,6 +445,16 @@ int main(int argc, char **argv) {
 			}
 			double level = audio_loudness_to_decibel(1.0 * vol / 100);
 			config.volume_init_level = MIN(MAX(level, -96.0), 96.0) * 100;
+			break;
+		}
+
+		case 26 /* --multi-attenuation=NUM */ : {
+			unsigned int attenuation = atoi(optarg);
+			if (attenuation > 99) {
+				error("Invalid multi mix attenuation [0, 100]: %s", optarg);
+				return EXIT_FAILURE;
+			}
+			config.multi_native_volume = (double)(100 - attenuation) / 100;
 			break;
 		}
 

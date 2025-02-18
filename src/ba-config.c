@@ -47,6 +47,7 @@ struct ba_config config = {
 	.disable_realtek_usb_fix = false,
 
 	.multi_enabled = false,
+	.multi_native_volume = 1.0,
 
 	/* CVSD is a mandatory codec */
 	.hfp.codecs.cvsd = true,
