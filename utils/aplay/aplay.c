@@ -595,11 +595,13 @@ static void *io_worker_routine(struct io_worker *w) {
 				ioctl(w->ba_pcm_fd, FIONREAD, &buffered);
 				const size_t discard_bytes = MIN(buffered, ffb_blen_out(&read_buffer));
 				const size_t discard_samples = discard_bytes / pcm_format_size;
-				warn("Dropping PCM frames: %zu", discard_samples / w->ba_pcm.channels);
 				ffb_shift(&read_buffer, discard_samples);
+				if (alsa_pcm_is_open(&w->alsa_pcm)) {
+					warn("Dropping PCM frames: %zu", discard_samples / w->ba_pcm.channels);
 #if ENABLE_APLAY_RESAMPLER
-				if (use_resampler)
-					resampler_reset(resampler);
+					if (use_resampler)
+						resampler_reset(resampler);
+				}
 #endif
 			}
 
