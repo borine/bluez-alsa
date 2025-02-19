@@ -727,6 +727,9 @@ static void *io_worker_routine(struct io_worker *w) {
 						w->alsa_pcm.rate,
 						read_buffer.nmemb / w->ba_pcm.channels);
 
+				if (resampler == NULL)
+					goto fail;
+
 				/* The resampler output buffer is sized to accommodate the
 				 * result of resampling a full read_buffer, plus a little extra
 				 * to allow for positive adaptive resampling adjustment. */
