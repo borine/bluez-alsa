@@ -25,11 +25,11 @@
 
 /* How many milliseconds to allow the delay to change before adjusting the
  * resampling rate. */
-# define RESAMPLER_TOLERANCE_MS 2
+# define RESAMPLER_TOLERANCE_MS 5
 
 /* How many milliseconds to wait for the delay value to stabilize after a
  * reset. */
-#define RESAMPLER_STABILIZE_MS 2000
+#define RESAMPLER_STABILIZE_MS 5000
 
 struct aplay_resampler {
 	SRC_STATE *src_state;
@@ -124,7 +124,7 @@ struct aplay_resampler *resampler_create(
 	resampler->in_format = in_format;
 	resampler->out_format = out_format;
 	resampler->max_frames = max_frames;
-	resampler->rate_delta = 1.0 / ((double)in_rate * 8);
+	resampler->rate_delta = 1.0 / ((double)in_rate * 16);
 	resampler->delay_tolerance = RESAMPLER_TOLERANCE_MS * in_rate / 1000;
 	resampler->nominal_rate_ratio = (double)out_rate / (double)in_rate;
 	resampler->src_data.src_ratio = resampler->nominal_rate_ratio;
