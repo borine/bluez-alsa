@@ -1,5 +1,5 @@
 /*
- * BlueALSA - bluealsa-mix-buffer.h
+ * BlueALSA - ba-mix-buffer.h
  * Copyright (c) 2016-2025 Arkadiusz Bokowy
  * Copyright (c) 2025 borine
  *
@@ -8,14 +8,14 @@
  * This project is licensed under the terms of the MIT license.
  *
  */
-#ifndef BLUEALSA_MIX_BUFFER_H
-#define BLUEALSA_MIX_BUFFER_H
+#ifndef BA_MIX_BUFFER_H
+#define BA_MIX_BUFFER_H
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/types.h>
 
-struct bluealsa_mix_buffer {
+struct ba_mix_buffer {
 	/* sample format */
 	uint16_t format;
 	uint8_t channels;
@@ -38,24 +38,24 @@ struct bluealsa_mix_buffer {
 	size_t end;
 };
 
-int ba_pcm_mix_buffer_init(struct bluealsa_mix_buffer *buffer,
+int ba_pcm_mix_buffer_init(struct ba_mix_buffer *buffer,
 				uint16_t format, uint8_t channels,
 				size_t buffer_frames, size_t period_frames);
 
-void ba_pcm_mix_buffer_release(struct bluealsa_mix_buffer *buffer);
+void ba_pcm_mix_buffer_release(struct ba_mix_buffer *buffer);
 
-bool ba_pcm_mix_buffer_at_threshold(struct bluealsa_mix_buffer *buffer);
+bool ba_pcm_mix_buffer_at_threshold(struct ba_mix_buffer *buffer);
 
-size_t ba_pcm_mix_buffer_calc_avail(const struct bluealsa_mix_buffer *buffer, size_t start, size_t end);
-bool ba_pcm_mix_buffer_empty(const struct bluealsa_mix_buffer *buffer);
-size_t ba_pcm_mix_buffer_delay(const struct bluealsa_mix_buffer *buffer, size_t offset);
+size_t ba_pcm_mix_buffer_calc_avail(const struct ba_mix_buffer *buffer, size_t start, size_t end);
+bool ba_pcm_mix_buffer_empty(const struct ba_mix_buffer *buffer);
+size_t ba_pcm_mix_buffer_delay(const struct ba_mix_buffer *buffer, size_t offset);
 
-size_t ba_pcm_mix_buffer_add(struct bluealsa_mix_buffer *buffer,
+size_t ba_pcm_mix_buffer_add(struct ba_mix_buffer *buffer,
 				intmax_t *offset, const void *data, size_t bytes);
 
-size_t ba_pcm_mix_buffer_read(struct bluealsa_mix_buffer *buffer,
+size_t ba_pcm_mix_buffer_read(struct ba_mix_buffer *buffer,
 				void *data, size_t frames, double *scale);
 
-void ba_pcm_mix_buffer_clear(struct bluealsa_mix_buffer *buffer);
+void ba_pcm_mix_buffer_clear(struct ba_mix_buffer *buffer);
 
-#endif /* BLUEALSA_MIX_BUFFER_H */
+#endif /* BA_MIX_BUFFER_H */

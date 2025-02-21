@@ -1,5 +1,5 @@
 /*
- * BlueALSA - bluealsa-mix-buffer.c
+ * BlueALSA - ba-mix-buffer.c
  * Copyright (c) 2016-2025 Arkadiusz Bokowy
  * Copyright (c) 2025 borine
  *
@@ -23,8 +23,8 @@
 #include "ba-pcm-mix-buffer.h"
 #include "ba-pcm-multi.h"
 
-#define BLUEALSA_24BIT_MIN (int32_t)0xFF800000
-#define BLUEALSA_24BIT_MAX (int32_t)0x007FFFFF
+#define BA_24BIT_MIN (int32_t)0xFF800000
+#define BA_24BIT_MAX (int32_t)0x007FFFFF
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 
@@ -63,7 +63,7 @@
  * @param channels The number of channels in each frame.
  * @param buffer_frames The requested capacity of the buffer, in frames.
  * @param period_frames The number of frames to be transferred at one time.*/
-int ba_pcm_mix_buffer_init(struct bluealsa_mix_buffer *buffer,
+int ba_pcm_mix_buffer_init(struct ba_mix_buffer *buffer,
 				uint16_t format, uint8_t channels,
 				size_t buffer_frames, size_t period_frames) {
 	buffer->format = format;
@@ -103,7 +103,7 @@ int ba_pcm_mix_buffer_init(struct bluealsa_mix_buffer *buffer,
 
 /**
  * Release the resources used by a mix buffer. */
-void ba_pcm_mix_buffer_release(struct bluealsa_mix_buffer *buffer) {
+void ba_pcm_mix_buffer_release(struct ba_mix_buffer *buffer) {
 	buffer->size = 0;
 	free(buffer->data.any);
 	buffer->data.any = NULL;
@@ -114,7 +114,7 @@ void ba_pcm_mix_buffer_release(struct bluealsa_mix_buffer *buffer) {
  *
  * @param start offset of first sample to be read.
  * @param end   offset of last sample to be read. */
-size_t ba_pcm_mix_buffer_calc_avail(const struct bluealsa_mix_buffer *buffer, size_t start, size_t end) {
+size_t ba_pcm_mix_buffer_calc_avail(const struct ba_mix_buffer *buffer, size_t start, size_t end) {
 	if (end >= start)
 		return end - start;
 	else
@@ -123,23 +123,23 @@ size_t ba_pcm_mix_buffer_calc_avail(const struct bluealsa_mix_buffer *buffer, si
 
 /**
  * Is the buffer empty ? */
-bool ba_pcm_mix_buffer_empty(const struct bluealsa_mix_buffer *buffer) {
+bool ba_pcm_mix_buffer_empty(const struct ba_mix_buffer *buffer) {
 	return buffer->mix_offset == buffer->end;
 }
 
 /**
  * The delay, expressed in samples, that would be incurred by adding the next
  * frame at the given offset. */
-size_t ba_pcm_mix_buffer_delay(const struct bluealsa_mix_buffer *buffer, size_t offset) {
+size_t ba_pcm_mix_buffer_delay(const struct ba_mix_buffer *buffer, size_t offset) {
 	return ba_pcm_mix_buffer_calc_avail(buffer, buffer->mix_offset, offset);
 }
 
 /**
  * true if the number of frames available to be read is greater than the
  * start threshold. */
-bool ba_pcm_mix_buffer_at_threshold(struct bluealsa_mix_buffer *buffer) {
+bool ba_pcm_mix_buffer_at_threshold(struct ba_mix_buffer *buffer) {
 	size_t avail = ba_pcm_mix_buffer_calc_avail(buffer, buffer->mix_offset, buffer->end);
-	return avail >= BLUEALSA_MULTI_MIX_THRESHOLD * buffer->period;
+	return avail >= BA_MULTI_MIX_THRESHOLD * buffer->period;
 }
 
 /**
@@ -152,7 +152,7 @@ bool ba_pcm_mix_buffer_at_threshold(struct bluealsa_mix_buffer *buffer) {
  * @param bytes The number of bytes in the stream.
  * @return The number of bytes actually added into the mix. This value is always
  *         a whole number of frames. */
-size_t ba_pcm_mix_buffer_add(struct bluealsa_mix_buffer *buffer, intmax_t *offset, const void *data, size_t bytes) {
+size_t ba_pcm_mix_buffer_add(struct ba_mix_buffer *buffer, intmax_t *offset, const void *data, size_t bytes) {
 
 	size_t start;
 	size_t mix_offset = buffer->mix_offset;
@@ -182,7 +182,7 @@ size_t ba_pcm_mix_buffer_add(struct bluealsa_mix_buffer *buffer, intmax_t *offse
 	/* To keep all clients as closely synchronized as possible, do not
 	 * allow any client to advance more than the mix threshold ahead of
 	 * the current read position. */
-	const size_t limit = mix_offset + BLUEALSA_MULTI_MIX_THRESHOLD * buffer->period;
+	const size_t limit = mix_offset + BA_MULTI_MIX_THRESHOLD * buffer->period;
 	if (start >= limit)
 		return 0;
 
@@ -240,7 +240,7 @@ size_t ba_pcm_mix_buffer_add(struct bluealsa_mix_buffer *buffer, intmax_t *offse
  * @param scale An array of scaling factors, one for each channel of the stream.
  * @return number of samples fetched from mix. This is always complete frames.
  * */
-size_t ba_pcm_mix_buffer_read(struct bluealsa_mix_buffer *buffer, void *data, size_t samples, double *scale) {
+size_t ba_pcm_mix_buffer_read(struct ba_mix_buffer *buffer, void *data, size_t samples, double *scale) {
 
 	size_t start = buffer->mix_offset;
 	size_t end = buffer->end;
@@ -315,10 +315,10 @@ size_t ba_pcm_mix_buffer_read(struct bluealsa_mix_buffer *buffer, void *data, si
 					}
 					else {
 						sample[channel] *= scale[channel];
-						if (sample[channel] > BLUEALSA_24BIT_MAX)
-							sample[channel] = BLUEALSA_24BIT_MAX;
-						else if (sample[channel] < BLUEALSA_24BIT_MIN)
-							sample[channel] = BLUEALSA_24BIT_MIN;
+						if (sample[channel] > BA_24BIT_MAX)
+							sample[channel] = BA_24BIT_MAX;
+						else if (sample[channel] < BA_24BIT_MIN)
+							sample[channel] = BA_24BIT_MIN;
 					}
 					dest[out_offset++] =
                        (uint32_t)BA_INT32_TO_S24_4LE(sample[channel]);
@@ -360,7 +360,7 @@ size_t ba_pcm_mix_buffer_read(struct bluealsa_mix_buffer *buffer, void *data, si
 
 /**
  * Discard all frames from the mix buffer. */
-void ba_pcm_mix_buffer_clear(struct bluealsa_mix_buffer *buffer) {
+void ba_pcm_mix_buffer_clear(struct ba_mix_buffer *buffer) {
 	buffer->mix_offset = 0;
 	buffer->end = 0;
 	size_t buffer_bytes;

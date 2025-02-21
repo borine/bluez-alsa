@@ -164,7 +164,7 @@ struct ba_transport_pcm {
 	bool ba_dbus_exported;
 
 	/* Multi-client stream support */
-	struct bluealsa_pcm_multi *multi;
+	struct ba_pcm_multi *multi;
 
 };
 

@@ -1,5 +1,5 @@
 /*
- * BlueALSA - bluealsa-pcm-multi.h
+ * BlueALSA - ba-pcm-multi.h
  * Copyright (c) 2016-2025 Arkadiusz Bokowy
  * Copyright (c) 2025 borine
  *
@@ -9,8 +9,8 @@
  *
  */
 
-#ifndef BLUEALSA_PCM_MULTI_H
-#define BLUEALSA_PCM_MULTI_H
+#ifndef BA_PCM_MULTI_H
+#define BA_PCM_MULTI_H
 
 #include <glib.h>
 #include <pthread.h>
@@ -21,32 +21,32 @@
 #include "ba-pcm-mix-buffer.h"
 
 /* Number of periods to hold in mix before starting playback. */
-#define BLUEALSA_MULTI_MIX_THRESHOLD 4
+#define BA_MULTI_MIX_THRESHOLD 4
 
 /* Number of periods to hold in client before starting mix. */
-#define BLUEALSA_MULTI_CLIENT_THRESHOLD 2
+#define BA_MULTI_CLIENT_THRESHOLD 2
 
 
 struct ba_transport;
 struct ba_transport_pcm;
 
 enum ba_pcm_multi_state {
-	BLUEALSA_PCM_MULTI_STATE_INIT = 0,
-	BLUEALSA_PCM_MULTI_STATE_RUNNING,
-	BLUEALSA_PCM_MULTI_STATE_PAUSED,
-	BLUEALSA_PCM_MULTI_STATE_FINISHED,
+	BA_PCM_MULTI_STATE_INIT = 0,
+	BA_PCM_MULTI_STATE_RUNNING,
+	BA_PCM_MULTI_STATE_PAUSED,
+	BA_PCM_MULTI_STATE_FINISHED,
 };
 
-struct bluealsa_snoop_buffer {
+struct ba_snoop_buffer {
 	const uint8_t *data;
 	size_t len;
 };
 
-struct bluealsa_pcm_multi {
+struct ba_pcm_multi {
 	struct ba_transport_pcm *pcm;
 	union {
-		struct bluealsa_mix_buffer playback_buffer;
-		struct bluealsa_snoop_buffer capture_buffer;
+		struct ba_mix_buffer playback_buffer;
+		struct ba_snoop_buffer capture_buffer;
 	};
 	size_t period_bytes;
 	size_t period_frames;
@@ -75,22 +75,22 @@ struct bluealsa_pcm_multi {
 
 bool ba_pcm_multi_enabled(const struct ba_transport *t);
 
-struct bluealsa_pcm_multi *ba_pcm_multi_create(struct ba_transport_pcm *pcm);
+struct ba_pcm_multi *ba_pcm_multi_create(struct ba_transport_pcm *pcm);
 
-bool ba_pcm_multi_init(struct bluealsa_pcm_multi *multi);
+bool ba_pcm_multi_init(struct ba_pcm_multi *multi);
 
-void ba_pcm_multi_reset(struct bluealsa_pcm_multi *multi);
+void ba_pcm_multi_reset(struct ba_pcm_multi *multi);
 
-void ba_pcm_multi_free(struct bluealsa_pcm_multi *multi);
+void ba_pcm_multi_free(struct ba_pcm_multi *multi);
 
-bool ba_pcm_multi_add_client(struct bluealsa_pcm_multi *multi, int pcm_fd, int control_fd);
+bool ba_pcm_multi_add_client(struct ba_pcm_multi *multi, int pcm_fd, int control_fd);
 
-ssize_t ba_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t samples);
+ssize_t ba_pcm_multi_read(struct ba_pcm_multi *multi, void *buffer, size_t samples);
 
-ssize_t ba_pcm_multi_write(struct bluealsa_pcm_multi *multi, const void *buffer, size_t samples);
+ssize_t ba_pcm_multi_write(struct ba_pcm_multi *multi, const void *buffer, size_t samples);
 
-ssize_t ba_pcm_multi_fetch(struct bluealsa_pcm_multi *multi, void *buffer, size_t samples, bool *restarted);
+ssize_t ba_pcm_multi_fetch(struct ba_pcm_multi *multi, void *buffer, size_t samples, bool *restarted);
 
-int ba_pcm_multi_delay_get(const struct bluealsa_pcm_multi *multi);
+int ba_pcm_multi_delay_get(const struct ba_pcm_multi *multi);
 
-#endif /* BLUEALSA_PCM_MULTI_H */
+#endif /* BA_PCM_MULTI_H */

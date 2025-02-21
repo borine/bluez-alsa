@@ -1,5 +1,5 @@
 /*
- * BlueALSA - bluealsa-pcm-multi.c
+ * BlueALSA - ba-pcm-multi.c
  * Copyright (c) 2016-2025 Arkadiusz Bokowy
  * Copyright (c) 2025 borine
  *
@@ -33,36 +33,36 @@
 
 
 /* Limit number of clients to ensure sufficient resources are available. */
-#define BLUEALSA_MULTI_MAX_CLIENTS 32
+#define BA_MULTI_MAX_CLIENTS 32
 
 /* Size of epoll event array. Allow for client control, pcm, and drain timer,
  * plus the mix event fd. */
-#define BLUEALSA_MULTI_MAX_EVENTS (1 + BLUEALSA_MULTI_MAX_CLIENTS * 3)
+#define BA_MULTI_MAX_EVENTS (1 + BA_MULTI_MAX_CLIENTS * 3)
 
 /* Determines the size of the mix buffer. */
-#define BLUEALSA_MULTI_BUFFER_PERIODS 16
+#define BA_MULTI_BUFFER_PERIODS 16
 
 /* Internal period time */
-#define BLUEALSA_MULTI_PERIOD_MS 20
+#define BA_MULTI_PERIOD_MS 20
 
-static void *bluealsa_pcm_mix_thread_func(struct bluealsa_pcm_multi *multi);
-static void *bluealsa_pcm_snoop_thread_func(struct bluealsa_pcm_multi *multi);
-static void ba_pcm_multi_remove_client(struct bluealsa_pcm_multi *multi, struct bluealsa_pcm_client *client);
+static void *ba_pcm_mix_thread_func(struct ba_pcm_multi *multi);
+static void *ba_pcm_snoop_thread_func(struct ba_pcm_multi *multi);
+static void ba_pcm_multi_remove_client(struct ba_pcm_multi *multi, struct ba_pcm_client *client);
 
 
-static bool ba_pcm_multi_is_source(const struct bluealsa_pcm_multi *multi) {
+static bool ba_pcm_multi_is_source(const struct ba_pcm_multi *multi) {
 	return multi->pcm->mode == BA_TRANSPORT_PCM_MODE_SOURCE;
 }
 
-static bool ba_pcm_multi_is_sink(const struct bluealsa_pcm_multi *multi) {
+static bool ba_pcm_multi_is_sink(const struct ba_pcm_multi *multi) {
 	return multi->pcm->mode == BA_TRANSPORT_PCM_MODE_SINK;
 }
 
-static bool ba_pcm_multi_is_target(const struct bluealsa_pcm_multi *multi) {
+static bool ba_pcm_multi_is_target(const struct ba_pcm_multi *multi) {
 	return multi->pcm->t->profile & (BA_TRANSPORT_PROFILE_A2DP_SINK | BA_TRANSPORT_PROFILE_MASK_HF);
 }
 
-static void ba_pcm_multi_cleanup(struct bluealsa_pcm_multi *multi) {
+static void ba_pcm_multi_cleanup(struct ba_pcm_multi *multi) {
 	if (multi->thread != config.main_thread) {
 		eventfd_write(multi->event_fd, 0xDEAD0000);
 		pthread_join(multi->thread, NULL);
@@ -78,11 +78,11 @@ static void ba_pcm_multi_cleanup(struct bluealsa_pcm_multi *multi) {
 	pthread_mutex_unlock(&multi->client_mutex);
 }
 
-static void ba_pcm_multi_init_clients(struct bluealsa_pcm_multi *multi) {
+static void ba_pcm_multi_init_clients(struct ba_pcm_multi *multi) {
 	pthread_mutex_lock(&multi->client_mutex);
 	GList *el;
 	for (el = multi->clients; el != NULL; el = el->next) {
-		struct bluealsa_pcm_client *client = el->data;
+		struct ba_pcm_client *client = el->data;
 		if (client->buffer == NULL) {
 			if (!ba_pcm_client_init(client))
 				ba_pcm_multi_remove_client(client->multi, client);
@@ -91,11 +91,11 @@ static void ba_pcm_multi_init_clients(struct bluealsa_pcm_multi *multi) {
 	pthread_mutex_unlock(&multi->client_mutex);
 }
 
-static void ba_pcm_multi_underrun(struct bluealsa_pcm_multi *multi) {
+static void ba_pcm_multi_underrun(struct ba_pcm_multi *multi) {
 	pthread_mutex_lock(&multi->client_mutex);
 	GList *el;
 	for (el = multi->clients; el != NULL; el = el->next) {
-		struct bluealsa_pcm_client *client = el->data;
+		struct ba_pcm_client *client = el->data;
 		ba_pcm_client_underrun(client);
 	}
 	pthread_mutex_unlock(&multi->client_mutex);
@@ -103,10 +103,10 @@ static void ba_pcm_multi_underrun(struct bluealsa_pcm_multi *multi) {
 
 /**
  * Start the multi client thread. */
-static bool ba_pcm_multi_start(struct bluealsa_pcm_multi *multi) {
+static bool ba_pcm_multi_start(struct ba_pcm_multi *multi) {
 
 	if (ba_pcm_multi_is_sink(multi)) {
-		if (pthread_create(&multi->thread, NULL, PTHREAD_FUNC(bluealsa_pcm_mix_thread_func), multi) == -1) {
+		if (pthread_create(&multi->thread, NULL, PTHREAD_FUNC(ba_pcm_mix_thread_func), multi) == -1) {
 			error("Cannot create pcm multi mix thread: %s", strerror(errno));
 			ba_pcm_mix_buffer_release(&multi->playback_buffer);
 			multi->thread = config.main_thread;
@@ -115,7 +115,7 @@ static bool ba_pcm_multi_start(struct bluealsa_pcm_multi *multi) {
 		pthread_setname_np(multi->thread, "ba-pcm-mix");
 	}
 	else {
-		if (pthread_create(&multi->thread, NULL, PTHREAD_FUNC(bluealsa_pcm_snoop_thread_func), multi) == -1) {
+		if (pthread_create(&multi->thread, NULL, PTHREAD_FUNC(ba_pcm_snoop_thread_func), multi) == -1) {
 			error("Cannot create pcm multi snoop thread: %s", strerror(errno));
 			multi->thread = config.main_thread;
 			return false;
@@ -145,18 +145,18 @@ bool ba_pcm_multi_enabled(const struct ba_transport *t) {
  * so the value reported here is necessarily only an estimate, based on the
  * number of unread frames in the mix buffer plus a constant value
  * approximating the "typical" number of frames held in a client read buffer. */
-int ba_pcm_multi_delay_get(const struct bluealsa_pcm_multi *multi) {
+int ba_pcm_multi_delay_get(const struct ba_pcm_multi *multi) {
 	if (!ba_pcm_multi_is_sink(multi) || !multi->period_frames)
 		return 0;
-	int delay = ((ba_pcm_mix_buffer_delay(&multi->playback_buffer, multi->playback_buffer.end) / multi->pcm->channels)  + (BLUEALSA_MULTI_CLIENT_THRESHOLD * multi->period_frames)) * 100 / multi->pcm->rate;
+	int delay = ((ba_pcm_mix_buffer_delay(&multi->playback_buffer, multi->playback_buffer.end) / multi->pcm->channels)  + (BA_MULTI_CLIENT_THRESHOLD * multi->period_frames)) * 100 / multi->pcm->rate;
 	return delay;
 }
 
 /**
  * Create multi-client support for the given transport pcm. */
-struct bluealsa_pcm_multi *ba_pcm_multi_create(struct ba_transport_pcm *pcm) {
+struct ba_pcm_multi *ba_pcm_multi_create(struct ba_transport_pcm *pcm) {
 
-	struct bluealsa_pcm_multi *multi = calloc(1, sizeof(struct bluealsa_pcm_multi));
+	struct ba_pcm_multi *multi = calloc(1, sizeof(struct ba_pcm_multi));
 	if (multi == NULL)
 		return multi;
 
@@ -193,15 +193,15 @@ fail:
  *
  * @param multi The multi-client instance to be initialized.
  * @return true if multi-client successfully initialized. */
-bool ba_pcm_multi_init(struct bluealsa_pcm_multi *multi) {
+bool ba_pcm_multi_init(struct ba_pcm_multi *multi) {
 	debug("Initializing multi client support");
 
-	multi->state = BLUEALSA_PCM_MULTI_STATE_INIT;
-	multi->period_frames = BLUEALSA_MULTI_PERIOD_MS * multi->pcm->rate / 1000;
+	multi->state = BA_PCM_MULTI_STATE_INIT;
+	multi->period_frames = BA_MULTI_PERIOD_MS * multi->pcm->rate / 1000;
 	multi->period_bytes = multi->period_frames * multi->pcm->channels * BA_TRANSPORT_PCM_FORMAT_BYTES(multi->pcm->format);
 
 	if (ba_pcm_multi_is_sink(multi)) {
-		size_t buffer_frames = BLUEALSA_MULTI_BUFFER_PERIODS * multi->period_frames;
+		size_t buffer_frames = BA_MULTI_BUFFER_PERIODS * multi->period_frames;
 		if (ba_pcm_mix_buffer_init(&multi->playback_buffer,
 				multi->pcm->format, multi->pcm->channels,
 				buffer_frames, multi->period_frames) == -1)
@@ -224,15 +224,15 @@ bool ba_pcm_multi_init(struct bluealsa_pcm_multi *multi) {
 
 /**
  * Stop the multi-client support. */
-void ba_pcm_multi_reset(struct bluealsa_pcm_multi *multi) {
+void ba_pcm_multi_reset(struct ba_pcm_multi *multi) {
 	if (!ba_pcm_multi_is_target(multi))
 		ba_pcm_multi_cleanup(multi);
-	multi->state = BLUEALSA_PCM_MULTI_STATE_INIT;
+	multi->state = BA_PCM_MULTI_STATE_INIT;
 }
 
 /**
  * Release the resources used by a multi. */
-void ba_pcm_multi_free(struct bluealsa_pcm_multi *multi) {
+void ba_pcm_multi_free(struct ba_pcm_multi *multi) {
 	ba_pcm_multi_cleanup(multi);
 	g_list_free(multi->clients);
 
@@ -256,14 +256,14 @@ void ba_pcm_multi_free(struct bluealsa_pcm_multi *multi) {
  * @param control_fd File descriptor for client control commands.
  * @return true if successful.
  */
-bool ba_pcm_multi_add_client(struct bluealsa_pcm_multi *multi, int pcm_fd, int control_fd) {
+bool ba_pcm_multi_add_client(struct ba_pcm_multi *multi, int pcm_fd, int control_fd) {
 	int rv;
 	bool close_fd_on_fail = false;
 
-	if (multi->client_count == BLUEALSA_MULTI_MAX_CLIENTS)
+	if (multi->client_count == BA_MULTI_MAX_CLIENTS)
 		return false;
 
-	if (ba_pcm_multi_is_source(multi) && multi->state == BLUEALSA_PCM_MULTI_STATE_FINISHED) {
+	if (ba_pcm_multi_is_source(multi) && multi->state == BA_PCM_MULTI_STATE_FINISHED) {
 		/* client thread has failed - clean it up before starting new one. */
 		ba_pcm_multi_reset(multi);
 	}
@@ -277,7 +277,7 @@ bool ba_pcm_multi_add_client(struct bluealsa_pcm_multi *multi, int pcm_fd, int c
 	if (rv == -1)
 		return false;
 
-	struct bluealsa_pcm_client *client = ba_pcm_client_new(multi, pcm_fd, control_fd);
+	struct ba_pcm_client *client = ba_pcm_client_new(multi, pcm_fd, control_fd);
 	if (!client)
 		goto fail;
 
@@ -300,12 +300,12 @@ bool ba_pcm_multi_add_client(struct bluealsa_pcm_multi *multi, int pcm_fd, int c
 	multi->client_count++;
 
 	if (ba_pcm_multi_is_sink(multi)) {
-		if (multi->state == BLUEALSA_PCM_MULTI_STATE_FINISHED)
-			multi->state = BLUEALSA_PCM_MULTI_STATE_INIT;
+		if (multi->state == BA_PCM_MULTI_STATE_FINISHED)
+			multi->state = BA_PCM_MULTI_STATE_INIT;
 	}
 	else {
-		if (multi->state == BLUEALSA_PCM_MULTI_STATE_INIT)
-			multi->state = BLUEALSA_PCM_MULTI_STATE_RUNNING;
+		if (multi->state == BA_PCM_MULTI_STATE_INIT)
+			multi->state = BA_PCM_MULTI_STATE_RUNNING;
 	}
 
 	pthread_mutex_unlock(&multi->client_mutex);
@@ -336,7 +336,7 @@ fail:
 /**
  * Remove a client stream.
  * @return false if no clients remain, true otherwise. */
-static void ba_pcm_multi_remove_client(struct bluealsa_pcm_multi *multi, struct bluealsa_pcm_client *client) {
+static void ba_pcm_multi_remove_client(struct ba_pcm_multi *multi, struct ba_pcm_client *client) {
 	client->multi->clients = g_list_remove(multi->clients, client);
 	--client->multi->client_count;
 	debug("removed client no %zu, total clients now %zu", client->id, multi->client_count);
@@ -351,11 +351,11 @@ static void ba_pcm_multi_remove_client(struct bluealsa_pcm_multi *multi, struct 
  * @param buffer Pointer to the buffer from which to obtain the samples.
  * @param samples the number of samples available in the decoder buffer.
  * @return the number of samples written. */
-ssize_t ba_pcm_multi_write(struct bluealsa_pcm_multi *multi, const void *buffer, size_t samples) {
+ssize_t ba_pcm_multi_write(struct ba_pcm_multi *multi, const void *buffer, size_t samples) {
 
 	pthread_mutex_lock(&multi->client_mutex);
 
-	if (multi->state == BLUEALSA_PCM_MULTI_STATE_FINISHED) {
+	if (multi->state == BA_PCM_MULTI_STATE_FINISHED) {
 		pthread_mutex_lock(&multi->pcm->mutex);
 		ba_transport_pcm_release(multi->pcm);
 		pthread_mutex_unlock(&multi->pcm->mutex);
@@ -365,11 +365,11 @@ ssize_t ba_pcm_multi_write(struct bluealsa_pcm_multi *multi, const void *buffer,
 
 	GList *el;
 	for (el = multi->clients; el != NULL; el = el->next) {
-		struct bluealsa_pcm_client *client = el->data;
-		if (client->state == BLUEALSA_PCM_CLIENT_STATE_RUNNING)
+		struct ba_pcm_client *client = el->data;
+		if (client->state == BA_PCM_CLIENT_STATE_RUNNING)
 			ba_pcm_client_write(client, buffer, samples);
 
-		if (client->state == BLUEALSA_PCM_CLIENT_STATE_FINISHED) {
+		if (client->state == BA_PCM_CLIENT_STATE_FINISHED) {
 			ba_pcm_multi_remove_client(multi, client);
 		}
 	}
@@ -383,7 +383,7 @@ finish:
  * Read mixed samples.
  *
  * multi client replacement for io_pcm_read() */
-ssize_t ba_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t samples) {
+ssize_t ba_pcm_multi_read(struct ba_pcm_multi *multi, void *buffer, size_t samples) {
 	eventfd_t value = 0;
 	ssize_t ret;
 	enum ba_pcm_multi_state state;
@@ -406,13 +406,13 @@ ssize_t ba_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t
 	eventfd_write(multi->event_fd, 1);
 
 	/* Wait for mix update to complete */
-	while (((state = multi->state) == BLUEALSA_PCM_MULTI_STATE_RUNNING) && !multi->buffer_ready)
+	while (((state = multi->state) == BA_PCM_MULTI_STATE_RUNNING) && !multi->buffer_ready)
 		pthread_cond_wait(&multi->cond, &multi->buffer_mutex);
 	multi->buffer_ready = false;
 	pthread_mutex_unlock(&multi->buffer_mutex);
 
 	switch (state) {
-	case BLUEALSA_PCM_MULTI_STATE_RUNNING:
+	case BA_PCM_MULTI_STATE_RUNNING:
 	{
 		double scale_array[multi->pcm->channels];
 		if (multi->pcm->soft_volume) {
@@ -439,13 +439,13 @@ ssize_t ba_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t
 		}
 		break;
 	}
-	case BLUEALSA_PCM_MULTI_STATE_FINISHED:
+	case BA_PCM_MULTI_STATE_FINISHED:
 		pthread_mutex_lock(&multi->pcm->mutex);
 		ba_transport_pcm_release(multi->pcm);
 		pthread_mutex_unlock(&multi->pcm->mutex);
 		ret = 0;
 		break;
-	case BLUEALSA_PCM_MULTI_STATE_INIT:
+	case BA_PCM_MULTI_STATE_INIT:
 		errno = EAGAIN;
 		ret = -1;
 		break;
@@ -460,7 +460,7 @@ ssize_t ba_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t
 
 /**
  * Signal the transport i/o thread that mixed samples are available. */
-static void ba_pcm_multi_wake_transport(struct bluealsa_pcm_multi *multi) {
+static void ba_pcm_multi_wake_transport(struct ba_pcm_multi *multi) {
 	pthread_mutex_lock(&multi->pcm->mutex);
 	eventfd_write(multi->pcm->fd, 1);
 	pthread_mutex_unlock(&multi->pcm->mutex);
@@ -469,17 +469,17 @@ static void ba_pcm_multi_wake_transport(struct bluealsa_pcm_multi *multi) {
 /**
  * Add more samples from clients into the mix.
  * Caller must hold lock on multi client_mutex  */
-static void ba_pcm_multi_update_mix(struct bluealsa_pcm_multi *multi) {
+static void ba_pcm_multi_update_mix(struct ba_pcm_multi *multi) {
 	GList *el;
 	for (el = multi->clients; el != NULL; el = el->next) {
-		struct bluealsa_pcm_client *client = el->data;
+		struct ba_pcm_client *client = el->data;
 		ba_pcm_client_deliver(client);
 	}
 }
 
 /**
  * Inform the io thread that the last client has closed its connection. */
-static void ba_pcm_multi_close(struct bluealsa_pcm_multi *multi) {
+static void ba_pcm_multi_close(struct ba_pcm_multi *multi) {
 	pthread_mutex_lock(&multi->pcm->mutex);
 	ba_transport_pcm_release(multi->pcm);
 	pthread_mutex_unlock(&multi->pcm->mutex);
@@ -488,9 +488,9 @@ static void ba_pcm_multi_close(struct bluealsa_pcm_multi *multi) {
 
 /**
  * The mix thread. */
-static void *bluealsa_pcm_mix_thread_func(struct bluealsa_pcm_multi *multi) {
+static void *ba_pcm_mix_thread_func(struct ba_pcm_multi *multi) {
 
-	struct epoll_event events[BLUEALSA_MULTI_MAX_EVENTS] = { 0 };
+	struct epoll_event events[BA_MULTI_MAX_EVENTS] = { 0 };
 
 	struct epoll_event event = {
 		.events =  EPOLLIN,
@@ -504,7 +504,7 @@ static void *bluealsa_pcm_mix_thread_func(struct bluealsa_pcm_multi *multi) {
 
 		int event_count;
 		do {
-			event_count = epoll_wait(multi->epoll_fd, events, BLUEALSA_MULTI_MAX_EVENTS, -1);
+			event_count = epoll_wait(multi->epoll_fd, events, BA_MULTI_MAX_EVENTS, -1);
 		} while (event_count == -1 && errno == EINTR);
 
 		if (event_count <= 0) {
@@ -532,11 +532,11 @@ static void *bluealsa_pcm_mix_thread_func(struct bluealsa_pcm_multi *multi) {
 
 			else {   /* client event */
 				struct ba_pcm_client_event *cevent = events[n].data.ptr;
-				struct bluealsa_pcm_client *client = cevent->client;
+				struct ba_pcm_client *client = cevent->client;
 
 				ba_pcm_client_handle_event(cevent);
 
-				if (client->state == BLUEALSA_PCM_CLIENT_STATE_FINISHED) {
+				if (client->state == BA_PCM_CLIENT_STATE_FINISHED) {
 					pthread_mutex_lock(&multi->client_mutex);
 					ba_pcm_multi_remove_client(multi, client);
 					pthread_mutex_unlock(&multi->client_mutex);
@@ -549,14 +549,14 @@ static void *bluealsa_pcm_mix_thread_func(struct bluealsa_pcm_multi *multi) {
 		}
 
 		if (multi->client_count == 0) {
-			multi->state = BLUEALSA_PCM_MULTI_STATE_FINISHED;
+			multi->state = BA_PCM_MULTI_STATE_FINISHED;
 			ba_pcm_mix_buffer_clear(&multi->playback_buffer);
 			ba_pcm_multi_close(multi);
 			continue;
 		}
 
 		if (multi->client_count == 1) {
-			struct bluealsa_pcm_client* client = g_list_first(multi->clients)->data;
+			struct ba_pcm_client* client = g_list_first(multi->clients)->data;
 			if (client->drop) {
 				pthread_mutex_lock(&multi->pcm->mutex);
 				pthread_mutex_lock(&multi->buffer_mutex);
@@ -570,34 +570,34 @@ static void *bluealsa_pcm_mix_thread_func(struct bluealsa_pcm_multi *multi) {
 				pthread_mutex_unlock(&multi->pcm->mutex);
 				ba_transport_pcm_drop(multi->pcm);
 				client->drop = false;
-				multi->state = BLUEALSA_PCM_MULTI_STATE_INIT;
+				multi->state = BA_PCM_MULTI_STATE_INIT;
 				continue;
 			}
 		}
 
-		if (multi->state == BLUEALSA_PCM_MULTI_STATE_INIT) {
+		if (multi->state == BA_PCM_MULTI_STATE_INIT) {
 			if (multi->active_count > 0) {
 				pthread_mutex_lock(&multi->buffer_mutex);
 				pthread_mutex_lock(&multi->client_mutex);
 				ba_pcm_multi_update_mix(multi);
 				pthread_mutex_unlock(&multi->client_mutex);
 				if (ba_pcm_mix_buffer_at_threshold(&multi->playback_buffer)) {
-					multi->state = BLUEALSA_PCM_MULTI_STATE_RUNNING;
+					multi->state = BA_PCM_MULTI_STATE_RUNNING;
 					ba_pcm_multi_wake_transport(multi);
 				}
 				pthread_mutex_unlock(&multi->buffer_mutex);
 			}
 		}
-		else if (multi->state == BLUEALSA_PCM_MULTI_STATE_RUNNING) {
+		else if (multi->state == BA_PCM_MULTI_STATE_RUNNING) {
 			if (ba_pcm_mix_buffer_empty(&multi->playback_buffer))
-				multi->state = BLUEALSA_PCM_MULTI_STATE_INIT;
+				multi->state = BA_PCM_MULTI_STATE_INIT;
 			else
 				ba_pcm_multi_wake_transport(multi);
 		}
 	}
 
 terminate:
-	multi->state = BLUEALSA_PCM_MULTI_STATE_FINISHED;
+	multi->state = BA_PCM_MULTI_STATE_FINISHED;
 	pthread_cond_signal(&multi->cond);
 	ba_pcm_multi_wake_transport(multi);
 	debug("mix thread function terminated");
@@ -607,9 +607,9 @@ terminate:
 
 /**
  * The snoop thread. */
-static void *bluealsa_pcm_snoop_thread_func(struct bluealsa_pcm_multi *multi) {
+static void *ba_pcm_snoop_thread_func(struct ba_pcm_multi *multi) {
 
-	struct epoll_event events[BLUEALSA_MULTI_MAX_EVENTS];
+	struct epoll_event events[BA_MULTI_MAX_EVENTS];
 
 	struct epoll_event event = {
 		.events =  EPOLLIN,
@@ -623,7 +623,7 @@ static void *bluealsa_pcm_snoop_thread_func(struct bluealsa_pcm_multi *multi) {
 		int ret;
 
 		do {
-			ret = epoll_wait(multi->epoll_fd, events, BLUEALSA_MULTI_MAX_EVENTS, -1);
+			ret = epoll_wait(multi->epoll_fd, events, BA_MULTI_MAX_EVENTS, -1);
 		} while (ret == -1 && errno == EINTR);
 
 		if (ret <= 0) {
@@ -651,7 +651,7 @@ static void *bluealsa_pcm_snoop_thread_func(struct bluealsa_pcm_multi *multi) {
 					pthread_mutex_lock(&multi->client_mutex);
 					ba_pcm_multi_remove_client(multi, cevent->client);
 					if (multi->client_count == 0) {
-						multi->state = BLUEALSA_PCM_MULTI_STATE_FINISHED;
+						multi->state = BA_PCM_MULTI_STATE_FINISHED;
 						ba_pcm_multi_close(multi);
 					}
 					pthread_mutex_unlock(&multi->client_mutex);
@@ -662,8 +662,8 @@ static void *bluealsa_pcm_snoop_thread_func(struct bluealsa_pcm_multi *multi) {
 				}
 				else {
 					ba_pcm_client_handle_event(cevent);
-					if (multi->state == BLUEALSA_PCM_MULTI_STATE_PAUSED && multi->active_count > 0) {
-						multi->state = BLUEALSA_PCM_MULTI_STATE_RUNNING;
+					if (multi->state == BA_PCM_MULTI_STATE_PAUSED && multi->active_count > 0) {
+						multi->state = BA_PCM_MULTI_STATE_RUNNING;
 						ba_transport_pcm_resume(multi->pcm);
 ;
 					}
@@ -673,7 +673,7 @@ static void *bluealsa_pcm_snoop_thread_func(struct bluealsa_pcm_multi *multi) {
 	}
 
 terminate:
-	multi->state = BLUEALSA_PCM_MULTI_STATE_FINISHED;
+	multi->state = BA_PCM_MULTI_STATE_FINISHED;
 	debug("snoop thread function terminated");
 	return NULL;
 }

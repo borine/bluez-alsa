@@ -1,5 +1,5 @@
 /*
- * BlueALSA - bluealsa-pcm-client.h
+ * BlueALSA - ba-pcm-client.h
  * Copyright (c) 2016-2025 Arkadiusz Bokowy
  * Copyright (c) 2025 borine
  *
@@ -9,8 +9,8 @@
  *
  */
 
-#ifndef BLUEALSA_PCM_CLIENT_H
-#define BLUEALSA_PCM_CLIENT_H
+#ifndef BA_PCM_CLIENT_H
+#define BA_PCM_CLIENT_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -21,34 +21,34 @@
 
 enum ba_pcm_client_state {
 	/* client is registered, but not yet initialized */
-	BLUEALSA_PCM_CLIENT_STATE_INIT = 0,
+	BA_PCM_CLIENT_STATE_INIT = 0,
 	/* client is initialized, but not active */
-	BLUEALSA_PCM_CLIENT_STATE_IDLE,
+	BA_PCM_CLIENT_STATE_IDLE,
 	/* client is transferring audio frames */
-	BLUEALSA_PCM_CLIENT_STATE_RUNNING,
+	BA_PCM_CLIENT_STATE_RUNNING,
 	/* client has sent PAUSE command, waiting for RESUME */
-	BLUEALSA_PCM_CLIENT_STATE_PAUSED,
+	BA_PCM_CLIENT_STATE_PAUSED,
 	/* client has sent DRAIN command, processing frames remaining in the pipe */
-	BLUEALSA_PCM_CLIENT_STATE_DRAINING1,
+	BA_PCM_CLIENT_STATE_DRAINING1,
 	/* pipe is drained, waiting on timeout before returning to IDLE */
-	BLUEALSA_PCM_CLIENT_STATE_DRAINING2,
+	BA_PCM_CLIENT_STATE_DRAINING2,
 	/* client has closed pipe and/or control socket */
-	BLUEALSA_PCM_CLIENT_STATE_FINISHED,
+	BA_PCM_CLIENT_STATE_FINISHED,
 };
 
 enum ba_pcm_client_event_type {
-	BLUEALSA_EVENT_TYPE_PCM,
-	BLUEALSA_EVENT_TYPE_CONTROL,
-	BLUEALSA_EVENT_TYPE_DRAIN,
+	BA_EVENT_TYPE_PCM,
+	BA_EVENT_TYPE_CONTROL,
+	BA_EVENT_TYPE_DRAIN,
 };
 
 struct ba_pcm_client_event {
 	enum ba_pcm_client_event_type type;
-	struct bluealsa_pcm_client *client;
+	struct ba_pcm_client *client;
 };
 
-struct bluealsa_pcm_client {
-	struct bluealsa_pcm_multi *multi;
+struct ba_pcm_client {
+	struct ba_pcm_multi *multi;
 	int pcm_fd;
 	int control_fd;
 	int drain_timer_fd;
@@ -68,20 +68,20 @@ struct bluealsa_pcm_client {
 #endif
 };
 
-struct bluealsa_pcm_client *ba_pcm_client_new(
-					struct bluealsa_pcm_multi *multi,
+struct ba_pcm_client *ba_pcm_client_new(
+					struct ba_pcm_multi *multi,
 					int pcm_fd, int control_fd);
 
-bool ba_pcm_client_init(struct bluealsa_pcm_client *client);
+bool ba_pcm_client_init(struct ba_pcm_client *client);
 
-void ba_pcm_client_free(struct bluealsa_pcm_client *client);
+void ba_pcm_client_free(struct ba_pcm_client *client);
 
 void ba_pcm_client_handle_event(struct ba_pcm_client_event *event);
 void ba_pcm_client_handle_close_event(struct ba_pcm_client_event *event);
-void ba_pcm_client_deliver(struct bluealsa_pcm_client *client);
-void ba_pcm_client_fetch(struct bluealsa_pcm_client *client);
-void ba_pcm_client_write(struct bluealsa_pcm_client *client, const void *buffer, size_t samples);
-void ba_pcm_client_drain(struct bluealsa_pcm_client *client);
-void ba_pcm_client_underrun(struct bluealsa_pcm_client *client);
+void ba_pcm_client_deliver(struct ba_pcm_client *client);
+void ba_pcm_client_fetch(struct ba_pcm_client *client);
+void ba_pcm_client_write(struct ba_pcm_client *client, const void *buffer, size_t samples);
+void ba_pcm_client_drain(struct ba_pcm_client *client);
+void ba_pcm_client_underrun(struct ba_pcm_client *client);
 
-#endif /* BLUEALSA_PCM_CLIENT_H */
+#endif /* BA_PCM_CLIENT_H */
