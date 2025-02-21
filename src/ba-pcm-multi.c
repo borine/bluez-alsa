@@ -91,6 +91,16 @@ static void ba_pcm_multi_init_clients(struct bluealsa_pcm_multi *multi) {
 	pthread_mutex_unlock(&multi->client_mutex);
 }
 
+static void ba_pcm_multi_underrun(struct bluealsa_pcm_multi *multi) {
+	pthread_mutex_lock(&multi->client_mutex);
+	GList *el;
+	for (el = multi->clients; el != NULL; el = el->next) {
+		struct bluealsa_pcm_client *client = el->data;
+		ba_pcm_client_underrun(client);
+	}
+	pthread_mutex_unlock(&multi->client_mutex);
+}
+
 /**
  * Start the multi client thread. */
 static bool ba_pcm_multi_start(struct bluealsa_pcm_multi *multi) {
@@ -421,6 +431,9 @@ ssize_t ba_pcm_multi_read(struct bluealsa_pcm_multi *multi, void *buffer, size_t
 		}
 		ret = ba_pcm_mix_buffer_read(&multi->playback_buffer, buffer, samples, scale_array);
 		if (ret == 0) {
+			/* The mix buffer is empty. Any clients still running must have
+			 * underrun. */
+			ba_pcm_multi_underrun(multi);
 			errno = EAGAIN;
 			ret = -1;
 		}

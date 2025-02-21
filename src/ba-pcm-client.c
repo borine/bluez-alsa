@@ -450,6 +450,16 @@ void ba_pcm_client_handle_close_event(
 }
 
 /**
+ * Called when a running playback pcm fails to transfer audio frames in time
+ * to prevent mix buffer becoming empty. */
+void ba_pcm_client_underrun(struct bluealsa_pcm_client *client) {
+	if (client->state == BLUEALSA_PCM_CLIENT_STATE_RUNNING) {
+		ba_pcm_client_set_state(client, BLUEALSA_PCM_CLIENT_STATE_IDLE);
+		debug("client %zu underrun", client->id);
+	}
+}
+
+/**
  * Allocate a buffer suitable for transport transfer size, and set initial
  * state. */
 bool ba_pcm_client_init(struct bluealsa_pcm_client *client) {

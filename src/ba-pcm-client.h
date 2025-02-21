@@ -82,5 +82,6 @@ void ba_pcm_client_deliver(struct bluealsa_pcm_client *client);
 void ba_pcm_client_fetch(struct bluealsa_pcm_client *client);
 void ba_pcm_client_write(struct bluealsa_pcm_client *client, const void *buffer, size_t samples);
 void ba_pcm_client_drain(struct bluealsa_pcm_client *client);
+void ba_pcm_client_underrun(struct bluealsa_pcm_client *client);
 
 #endif /* BLUEALSA_PCM_CLIENT_H */
