@@ -16,10 +16,12 @@
 >
 > 1. Adaptive resampler for `bluealsa-aplay`. Improves stability of the audio
 >    delay, allowing streams to run continuously for many hours without
->    overruns or underruns.
+>    overruns or underruns. This feature has now been submitted upstream as
+>    [PR #750](https://github.com/arkq/bluez-alsa/pull/750)
 >
 > 1. Improved compatibility with the `hw` plugin when used on A2DP sink and SCO
-     gateway devices.
+>    gateway devices. This feature has now been submitted upstream as
+>    [PR #745](https://github.com/arkq/bluez-alsa/pull/745)
 >
 > 1. Support for additional ALSA PCM software parameters:
 >     * period_event
