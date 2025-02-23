@@ -785,8 +785,7 @@ static void *io_worker_routine(struct io_worker *w) {
 
 		}
 
-		/* Mark device as active and set timeout to the period time. */
-		timeout = w->alsa_pcm.period_time / 1000;
+		/* Mark device as active. */
 		w->active = true;
 
 		/* Current worker was marked as active, so we can safely
@@ -808,6 +807,13 @@ static void *io_worker_routine(struct io_worker *w) {
 
 		if (alsa_pcm_write(&w->alsa_pcm, write_buffer, !w->ba_pcm.running, verbose) < 0)
 			goto close_alsa;
+
+		/* Set poll() timeout such that this thread is always woken before an
+		 * ALSA underrun can occur */
+		timeout = 1000 * w->alsa_pcm.hw_avail / w->alsa_pcm.rate;
+		/* poll() timeouts may be late by up to 2ms depending on the scheduler
+		 * and workload. So we allow for this when setting the timeout value. */
+		timeout -= 2;
 
 		if (!w->ba_pcm.running)
 			goto device_inactive;
