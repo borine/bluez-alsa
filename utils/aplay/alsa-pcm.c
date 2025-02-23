@@ -216,9 +216,8 @@ int alsa_pcm_open(
 	pcm->start_threshold = start_threshold;
 	pcm->delay = 0;
 
-	/* Maintain buffer fill level above 1 period plus 2ms to allow
-	 * for scheduling delays */
-	pcm->underrun_threshold = pcm->period_frames + pcm->rate * 2 / 1000;
+	/* Maintain buffer fill level above 1 period */
+	pcm->underrun_threshold = pcm->period_frames;
 
 	return 0;
 
@@ -263,13 +262,14 @@ int alsa_pcm_write(
 
 	snd_pcm_sframes_t frames = ffb_len_out(buffer) / pcm->channels;
 	snd_pcm_sframes_t written_frames = 0;
+	snd_pcm_uframes_t hw_avail = pcm->buffer_frames - avail;
 
 	/* If not draining, write only as many frames as possible without
 	 * blocking. If necessary insert silence frames to prevent underrun. */
 	if (!drain) {
 		if (frames > avail)
 			frames = avail;
-		else if (pcm->buffer_frames - avail + frames < pcm->underrun_threshold &&
+		else if (hw_avail + frames < pcm->underrun_threshold &&
 					snd_pcm_state(pcm->pcm) == SND_PCM_STATE_RUNNING) {
 			/* Pad the buffer with enough silence to restore it to the underrun
 			 * threshold. */
@@ -304,7 +304,6 @@ int alsa_pcm_write(
 		else {
 			written_frames += ret;
 			frames -= ret;
-			delay += ret;
 		}
 	}
 
@@ -315,6 +314,7 @@ int alsa_pcm_write(
 	}
 
 	pcm->delay = delay + written_frames;
+	pcm->hw_avail = hw_avail + written_frames;
 
 	/* Move leftovers to the beginning and reposition tail. */
 	if (written_frames > 0)

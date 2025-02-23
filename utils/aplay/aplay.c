@@ -785,8 +785,7 @@ static void *io_worker_routine(struct io_worker *w) {
 
 		}
 
-		/* Mark device as active and set timeout to the period time. */
-		timeout = w->alsa_pcm.period_time / 1000;
+		/* Mark device as active. */
 		w->active = true;
 
 		/* Current worker was marked as active, so we can safely
@@ -797,7 +796,11 @@ static void *io_worker_routine(struct io_worker *w) {
 		}
 
 		if (!w->alsa_mixer.has_mute_switch && pcm_muted)
-			snd_pcm_format_set_silence(w->alsa_pcm.format, read_buffer.data, ffb_len_out(&read_buffer));
+#if ENABLE_RESAMPLER
+			snd_pcm_format_set_silence(resampler_native_format(w->alsa_pcm.format), write_buffer->data, ffb_len_out(write_buffer));
+#else
+			snd_pcm_format_set_silence(w->alsa_pcm.format, write_buffer->data, ffb_len_out(write_buffer));
+#endif
 
 #if ENABLE_APLAY_RESAMPLER
 		if (use_resampler) {
@@ -808,6 +811,13 @@ static void *io_worker_routine(struct io_worker *w) {
 
 		if (alsa_pcm_write(&w->alsa_pcm, write_buffer, !w->ba_pcm.running, verbose) < 0)
 			goto close_alsa;
+
+		/* Set poll() timeout such that this thread is always woken before an
+		 * ALSA underrun can occur */
+		timeout = 1000 * w->alsa_pcm.hw_avail / w->alsa_pcm.rate;
+		/* poll() timeouts may be late by up to 2ms depending on the scheduler
+		 * and workload. So we allow for this when setting the timeout value. */
+		timeout -= 2;
 
 		if (!w->ba_pcm.running)
 			goto device_inactive;
