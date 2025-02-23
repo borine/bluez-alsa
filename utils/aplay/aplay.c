@@ -796,7 +796,11 @@ static void *io_worker_routine(struct io_worker *w) {
 		}
 
 		if (!w->alsa_mixer.has_mute_switch && pcm_muted)
-			snd_pcm_format_set_silence(w->alsa_pcm.format, read_buffer.data, ffb_len_out(&read_buffer));
+#if ENABLE_RESAMPLER
+			snd_pcm_format_set_silence(resampler_native_format(w->alsa_pcm.format), write_buffer->data, ffb_len_out(write_buffer));
+#else
+			snd_pcm_format_set_silence(w->alsa_pcm.format, write_buffer->data, ffb_len_out(write_buffer));
+#endif
 
 #if ENABLE_APLAY_RESAMPLER
 		if (use_resampler) {
