@@ -583,7 +583,7 @@ static void *ba_pcm_mix_thread_func(struct ba_pcm_multi *multi) {
 				pthread_mutex_unlock(&multi->client_mutex);
 				if (ba_pcm_mix_buffer_at_threshold(&multi->playback_buffer)) {
 					multi->state = BA_PCM_MULTI_STATE_RUNNING;
-					ba_pcm_multi_wake_transport(multi);
+					ba_transport_pcm_resume(multi->pcm);
 				}
 				pthread_mutex_unlock(&multi->buffer_mutex);
 			}

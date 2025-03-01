@@ -113,7 +113,7 @@ void ba_pcm_mix_buffer_release(struct ba_mix_buffer *buffer) {
  * The number of samples that can be read from start offset to end offset.
  *
  * @param start offset of first sample to be read.
- * @param end   offset of last sample to be read. */
+ * @param end   offset of sample after the last one to be read. */
 size_t ba_pcm_mix_buffer_calc_avail(const struct ba_mix_buffer *buffer, size_t start, size_t end) {
 	if (end >= start)
 		return end - start;
