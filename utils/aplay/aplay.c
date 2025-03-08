@@ -725,7 +725,9 @@ static void *io_worker_routine(struct io_worker *w) {
 						w->ba_pcm.rate,
 						w->alsa_pcm.format,
 						w->alsa_pcm.rate,
-						read_buffer.nmemb / w->ba_pcm.channels);
+						w->alsa_pcm.start_threshold,
+						w->alsa_pcm.start_threshold + w->alsa_pcm.period_frames,
+						read_buffer.nmemb );
 
 				if (resampler == NULL)
 					goto fail;
@@ -826,9 +828,6 @@ static void *io_worker_routine(struct io_worker *w) {
 #if WITH_LIBSAMPLERATE
 		size_t resample_delay_frames;
 		if (use_resampler) {
-			if (!alsa_pcm_is_running(&w->alsa_pcm) || w->alsa_pcm.underrun)
-				resampler_reset(resampler);
-
 			resample_delay_frames = ffb_len_out(write_buffer) / w->ba_pcm.channels;
 			resample_delay_frames /= resampler_current_rate_ratio(resampler);
 		}
@@ -845,8 +844,14 @@ static void *io_worker_routine(struct io_worker *w) {
 		}
 
 #if WITH_LIBSAMPLERATE
-		if (use_resampler && alsa_pcm_is_running(&w->alsa_pcm)) {
-			bool rate_changed = resampler_update_rate_ratio(resampler, dr.avg_value);
+		if (use_resampler) {
+			bool rate_changed = false;
+			if (w->alsa_pcm.underrun) {
+				resampler_reset(resampler);
+				rate_changed = true;
+			}
+			if (alsa_pcm_is_running(&w->alsa_pcm))
+				rate_changed = resampler_update_rate_ratio(resampler, read_samples / w->ba_pcm.channels, dr.avg_value);
 			if (verbose >= 5 && rate_changed)
 				debug("new rate ratio %.6f", resampler_current_rate_ratio(resampler));
 		}

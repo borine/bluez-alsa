@@ -38,7 +38,9 @@ struct aplay_resampler *resampler_create(
 			unsigned int in_rate,
 			snd_pcm_format_t out_format,
 			unsigned int out_rate,
-			snd_pcm_uframes_t max_frames);
+			snd_pcm_uframes_t min_target,
+			snd_pcm_uframes_t max_target,
+			size_t buffer_size);
 
 void resampler_delete(struct aplay_resampler *resampler);
 
@@ -46,11 +48,11 @@ int resampler_process(struct aplay_resampler *resampler, ffb_t *in, ffb_t *out);
 
 bool resampler_update_rate_ratio(
 			struct aplay_resampler *resampler,
+			snd_pcm_uframes_t frames_read,
 			snd_pcm_uframes_t delay);
 
 void resampler_reset(struct aplay_resampler *resampler);
 double resampler_current_rate_ratio(struct aplay_resampler *resampler);
-bool resampler_ready(struct aplay_resampler *resampler);
 
 void resampler_format_le_to_native(void *buffer, size_t len, snd_pcm_format_t format);
 
