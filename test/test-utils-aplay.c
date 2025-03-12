@@ -172,7 +172,7 @@ CK_START_TEST(test_play_all) {
 				NULL), -1);
 	spawn_terminate(&sp_ba_aplay, 500);
 
-	char output[8192] = "";
+	char output[16384] = "";
 	ck_assert_int_gt(spawn_read(&sp_ba_aplay, NULL, 0, output, sizeof(output)), 0);
 
 	/* check if playback was started from both devices */
@@ -203,7 +203,7 @@ CK_START_TEST(test_play_single_audio) {
 				NULL), -1);
 	spawn_terminate(&sp_ba_aplay, 500);
 
-	char output[8192] = "";
+	char output[16384] = "";
 	ck_assert_int_gt(spawn_read(&sp_ba_aplay, NULL, 0, output, sizeof(output)), 0);
 
 	/* Check if playback was started for only one device. However,
