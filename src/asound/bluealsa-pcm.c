@@ -90,7 +90,8 @@ struct bluealsa_pcm {
 	int event_fd;
 
 	/* virtual hardware - ring buffer */
-	char * _Atomic io_hw_buffer;
+	uint8_t *io_hw_buffer;
+	snd_pcm_channel_area_t *channel_areas;
 	/* The IO thread is responsible for maintaining the hardware pointer
 	 * (pcm->io_hw_ptr), the application is responsible for the application
 	 * pointer (io->appl_ptr). These pointers should be atomic as they are
@@ -99,6 +100,18 @@ struct bluealsa_pcm {
 	_Atomic snd_pcm_uframes_t io_hw_boundary;
 	/* Permit the application to modify the frequency of poll() events. */
 	_Atomic snd_pcm_uframes_t io_avail_min;
+	/* Raise poll event at every period end */
+	atomic_int io_period_event;
+	/* Permit the application to modify XRUN behavior. */
+	_Atomic snd_pcm_uframes_t io_stop_threshold;
+	_Atomic snd_pcm_uframes_t io_silence_threshold;
+	_Atomic snd_pcm_uframes_t io_silence_size;
+
+	/* When the silence_size sw param is enabled, we maintain a region of
+	 * silence in the ring buffer, defined by its start offset and length */
+	snd_pcm_uframes_t silence_start;
+	snd_pcm_uframes_t silence_len;
+
 	pthread_t io_thread;
 	bool io_started;
 
@@ -135,20 +148,45 @@ struct bluealsa_pcm {
 /**
  * Get the available frames.
  *
- * This function is available in alsa-lib since version 1.1.6. For older
+ * These functions are available in alsa-lib since version 1.1.6. For older
  * alsa-lib versions we need to provide our own implementation. */
+
+/* The number of frames available to the application. May be larger than the
+ * buffer size if stop_threshold > buffer_size. */
+static snd_pcm_uframes_t snd_pcm_ioplug_avail(const snd_pcm_ioplug_t * const io,
+		const snd_pcm_uframes_t hw_ptr, const snd_pcm_uframes_t appl_ptr) {
+	struct bluealsa_pcm *pcm = io->private_data;
+	snd_pcm_sframes_t avail;
+
+	if (io->stream == SND_PCM_STREAM_PLAYBACK) {
+		avail = hw_ptr + io->buffer_size - appl_ptr;
+		if (avail < 0)
+			avail += pcm->io_hw_boundary;
+		else if ((snd_pcm_uframes_t) avail >= pcm->io_hw_boundary)
+			avail -= pcm->io_hw_boundary;
+	}
+	else {
+		avail = hw_ptr - appl_ptr;
+		if (avail < 0)
+			avail += pcm->io_hw_boundary;
+	}
+
+	return avail;
+}
+
+/* The number of frames available to the bluealsa I/O thread. Can never be
+ * larger than the buffer size. */
 static snd_pcm_uframes_t snd_pcm_ioplug_hw_avail(const snd_pcm_ioplug_t * const io,
 		const snd_pcm_uframes_t hw_ptr, const snd_pcm_uframes_t appl_ptr) {
 	struct bluealsa_pcm *pcm = io->private_data;
-	snd_pcm_sframes_t diff;
-	if (io->stream == SND_PCM_STREAM_PLAYBACK)
-		diff = appl_ptr - hw_ptr;
-	else
-		diff = io->buffer_size - hw_ptr + appl_ptr;
-	if (diff < 0)
-		diff += pcm->io_hw_boundary;
-	snd_pcm_uframes_t diff_ = diff;
-	return diff_ <= io->buffer_size ? diff_ : 0;
+	snd_pcm_uframes_t avail;
+
+	avail = snd_pcm_ioplug_avail(ioplug, hw_ptr, appl_ptr);
+
+	if (avail > io->buffer_size)
+		return 0;
+
+	return io->buffer_size - avail;
 }
 #endif
 
@@ -201,6 +239,50 @@ static void io_thread_update_delay(struct bluealsa_pcm *pcm,
 
 	pthread_mutex_unlock(&pcm->mutex);
 
+}
+
+static void bluealsa_update_silence_region(snd_pcm_ioplug_t *io, snd_pcm_uframes_t appl_ptr) {
+	struct bluealsa_pcm *pcm = io->private_data;
+	if (appl_ptr != pcm->silence_start) {
+		snd_pcm_sframes_t silence_lost = appl_ptr - pcm->silence_start;
+		if (silence_lost < 0)
+			silence_lost += pcm->io_hw_boundary;
+		if (silence_lost < (snd_pcm_sframes_t)pcm->silence_len)
+			pcm->silence_len -= silence_lost;
+		else
+			pcm->silence_len = 0;
+
+		pcm->silence_start = appl_ptr;
+	}
+}
+
+/**
+ * Overwrite a section of the ring buffer with silence. */
+static void bluealsa_silence(snd_pcm_ioplug_t *io, snd_pcm_uframes_t appl_ptr, snd_pcm_uframes_t hw_ptr) {
+	struct bluealsa_pcm *pcm = io->private_data;
+	snd_pcm_uframes_t frames = 0;
+
+	if (pcm->io_silence_threshold > 0) {
+		snd_pcm_sframes_t hw_avail = appl_ptr - hw_ptr;
+		if (hw_avail < 0)
+			hw_avail += pcm->io_hw_boundary;
+		snd_pcm_uframes_t noise_distance = hw_avail + pcm->silence_len;
+		if (noise_distance < pcm->io_silence_threshold) {
+			frames = pcm->io_silence_threshold - noise_distance;
+			if (frames > pcm->io_silence_size)
+				frames = pcm->io_silence_size;
+		}
+	}
+	else {
+		frames = io->buffer_size + hw_ptr - appl_ptr;
+		if (frames > io->buffer_size)
+			frames %= io->buffer_size;
+	}
+
+	snd_pcm_uframes_t offset = (pcm->silence_start + pcm->silence_len) % io->buffer_size;
+	pthread_mutex_lock(&pcm->mutex);
+	snd_pcm_areas_silence(pcm->channel_areas, offset, io->channels, frames, io->format);
+	pthread_mutex_unlock(&pcm->mutex);
 }
 
 /**
@@ -264,15 +346,28 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 			io_hw_ptr = pcm->io_hw_ptr;
 		}
 
-		/* There are 2 reasons why the number of available frames may be
-		 * zero: XRUN or drained final samples; we set the HW pointer to
-		 * -1 to indicate we have no work to do. */
-		snd_pcm_uframes_t avail;
-		if ((avail = snd_pcm_ioplug_hw_avail(io, io_hw_ptr, io->appl_ptr)) == 0) {
-			pcm->io_hw_ptr = io_hw_ptr = -1;
-			io_thread_update_delay(pcm, io_hw_ptr);
-			eventfd_write(pcm->event_fd, 1);
-			continue;
+		snd_pcm_sframes_t appl_ptr = io->appl_ptr;
+		snd_pcm_uframes_t appl_avail = snd_pcm_ioplug_avail(io, io_hw_ptr, appl_ptr);
+		snd_pcm_uframes_t avail = appl_avail < io->buffer_size ? io->buffer_size - appl_avail : io->period_size;
+		snd_pcm_uframes_t stop_threshold = io->state == SND_PCM_STATE_DRAINING ? io->buffer_size : pcm->io_stop_threshold;
+
+		/* If the stop_threshold == boundary then we ignore the application
+		 * pointer and continue to send one period of frames on each iteration.
+		 */
+		if (stop_threshold == pcm->io_hw_boundary) {
+			appl_avail = io->buffer_size;
+			avail = io->period_size;
+		}
+		else {
+			/* Otherwise we must stop the pcm when the stop threshold is
+			 * reached; we set the HW pointer to -1 to indicate we have no work
+			 * to do. */
+			if (appl_avail >= stop_threshold) {
+				pcm->io_hw_ptr = io_hw_ptr = -1;
+				io_thread_update_delay(pcm, io_hw_ptr);
+				eventfd_write(pcm->event_fd, 1);
+				continue;
+			}
 		}
 
 		/* current offset of the head pointer in the IO buffer */
@@ -304,7 +399,7 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 
 			/* IO operation size in bytes */
 			size_t len = chunk * pcm->frame_size;
-			char *head = pcm->io_hw_buffer + offset * pcm->frame_size;
+			uint8_t *head = pcm->io_hw_buffer + offset * pcm->frame_size;
 
 			ssize_t ret = 0;
 			if (io->stream == SND_PCM_STREAM_CAPTURE) {
@@ -332,6 +427,8 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 			}
 			else {
 
+				uint8_t *start = head;
+
 				/* Perform atomic write - see the explanation above. */
 				do {
 					if ((ret = write(pcm->ba_pcm_fd, head, len)) == -1) {
@@ -346,6 +443,11 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 					len -= ret;
 				} while (len != 0);
 
+				if (pcm->io_silence_size >= pcm->io_hw_boundary) {
+					/* Special case: fill just-written buffer frames with silence.*/
+					snd_pcm_format_set_silence(io->format, start, frames * io->channels);
+				}
+
 			}
 
 			frames_transfered += chunk;
@@ -356,15 +458,25 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
 
 		io_thread_update_delay(pcm, io_hw_ptr);
 
-		/* synchronize playback time */
-		if (io->stream == SND_PCM_STREAM_PLAYBACK)
+		if (io->stream == SND_PCM_STREAM_PLAYBACK) {
+			/* synchronize playback time */
 			asrsync_sync(&asrs, frames);
+
+			/* Apply silence sw parameter settings */
+			if (io->state == SND_PCM_STATE_RUNNING &&
+					pcm->io_silence_size > 0 &&
+					pcm->io_silence_size < pcm->io_hw_boundary)
+				bluealsa_silence(io, appl_ptr, io_hw_ptr);
+		}
 
 		/* Make the new HW pointer value visible to the ioplug. */
 		pcm->io_hw_ptr = io_hw_ptr;
 
-		/* Wake application thread if enough space/frames is available. */
-		if (frames + io->buffer_size - avail >= pcm->io_avail_min)
+		/* Wake application thread if enough space/frames is available, or
+		 * io_period_event is set. */
+		if (frames + appl_avail >= pcm->io_avail_min ||
+					pcm->io_stop_threshold > io->buffer_size ||
+					pcm->io_period_event)
 			eventfd_write(pcm->event_fd, 1);
 
 	}
@@ -390,6 +502,22 @@ fail:
 static int bluealsa_start(snd_pcm_ioplug_t *io) {
 	struct bluealsa_pcm *pcm = io->private_data;
 	debug2("Starting");
+
+	/* ALSA documentation does not specify failure states for snd_pcm_start(),
+	 * so, to be consistent with results from testing the hw plugin, when
+	 * snd_pcm_start() is called on a playback stream with the buffer empty we
+	 * leave the state unchanged (SND_PCM_STATE_PREPARED) but return -EPIPE. */
+	if (io->stream == SND_PCM_STREAM_PLAYBACK && io->appl_ptr == 0 && pcm->io_stop_threshold < pcm->io_hw_boundary)
+			return -EPIPE;
+
+	/* Special case: fill unused portion of buffer with silence.*/
+	if (io->stream == SND_PCM_STREAM_PLAYBACK &&
+				pcm->io_silence_size >= pcm->io_hw_boundary &&
+				pcm->io_silence_threshold == 0) {
+		const size_t offset = io->appl_ptr * pcm->frame_size;
+		unsigned int samples = (io->buffer_size - io->appl_ptr) * io->channels;
+		snd_pcm_format_set_silence(io->format, pcm->io_hw_buffer + offset, samples);
+	}
 
 	/* If the IO thread is already started, skip thread creation. Otherwise,
 	 * we might end up with a bunch of IO threads reading or writing to the
@@ -463,11 +591,14 @@ static snd_pcm_sframes_t bluealsa_pointer(snd_pcm_ioplug_t *io) {
 	if (!pcm->connected)
 		snd_pcm_ioplug_set_state(io, SND_PCM_STATE_DISCONNECTED);
 
-#ifndef SND_PCM_IOPLUG_FLAG_BOUNDARY_WA
-	if (pcm->io_hw_ptr != -1)
-		return pcm->io_hw_ptr % io->buffer_size;
-#endif
-	return pcm->io_hw_ptr;
+	snd_pcm_sframes_t hw_ptr = pcm->io_hw_ptr;
+	if (hw_ptr == -1)
+		return hw_ptr;
+
+ #ifndef SND_PCM_IOPLUG_FLAG_BOUNDARY_WA
+	return hw_ptr % io->buffer_size;
+ #endif
+	return hw_ptr;
 }
 
 static int bluealsa_close(snd_pcm_ioplug_t *io) {
@@ -628,6 +759,18 @@ static int bluealsa_hw_params(snd_pcm_ioplug_t *io, snd_pcm_hw_params_t *params)
 
 	pcm->frame_size = (snd_pcm_format_physical_width(io->format) * io->channels) / 8;
 
+	if ((pcm->io_hw_buffer = malloc(io->buffer_size * pcm->frame_size)) == NULL)
+		return -ENOMEM;
+
+	pcm->channel_areas = malloc(sizeof(snd_pcm_channel_area_t) * io->channels);
+	snd_pcm_channel_area_t *area = pcm->channel_areas;
+	unsigned channel;
+	for (channel = 0; channel < io->channels; ++channel, ++area) {
+		area->addr = pcm->io_hw_buffer;
+		area->first = channel * snd_pcm_format_physical_width(io->format);
+		area->step = pcm->frame_size * 8;
+	}
+
 	if (!ba_dbus_pcm_open(&pcm->dbus_ctx, pcm->ba_pcm.pcm_path,
 				&pcm->ba_pcm_fd, &pcm->ba_pcm_ctrl_fd, &err)) {
 		debug2("Couldn't open PCM: %s", err.message);
@@ -680,6 +823,10 @@ static int bluealsa_hw_free(snd_pcm_ioplug_t *io) {
 	pcm->ba_pcm_ctrl_fd = -1;
 	pcm->connected = false;
 
+	free(pcm->io_hw_buffer);
+	free(pcm->channel_areas);
+	pcm->io_hw_buffer = NULL;
+	pcm->channel_areas = NULL;
 	return rv == 0 ? 0 : -errno;
 }
 
@@ -691,11 +838,52 @@ static int bluealsa_sw_params(snd_pcm_ioplug_t *io, snd_pcm_sw_params_t *params)
 	snd_pcm_sw_params_get_boundary(params, &boundary);
 	pcm->io_hw_boundary = boundary;
 
+	snd_pcm_uframes_t silence_threshold;
+	snd_pcm_sw_params_get_silence_threshold(params, &silence_threshold);
+	snd_pcm_uframes_t silence_size;
+	snd_pcm_sw_params_get_silence_size(params, &silence_size);
+	if (silence_size >= boundary) {
+		if (silence_threshold != 0)
+			return -EINVAL;
+	}
+	else if (silence_size > silence_threshold)
+		return -EINVAL;
+
+	if (silence_threshold != pcm->io_silence_threshold) {
+		debug2("Changing SW silence threshold: %zu -> %zu", pcm->io_silence_threshold, silence_threshold);
+		pcm->io_silence_threshold = silence_threshold;
+	}
+	if (silence_size != pcm->io_silence_size) {
+		debug2("Changing SW silence size: %zu -> %zu", pcm->io_silence_size, silence_size);
+		pcm->io_silence_size = silence_size;
+		if (io->stream == SND_PCM_STREAM_PLAYBACK && pcm->io_silence_size >= pcm->io_hw_boundary) {
+			snd_pcm_sframes_t appl_ptr = io->appl_ptr;
+			bluealsa_update_silence_region(io, appl_ptr);
+			bluealsa_silence(io, appl_ptr, pcm->io_hw_ptr);
+		}
+	}
+
 	snd_pcm_uframes_t avail_min;
 	snd_pcm_sw_params_get_avail_min(params, &avail_min);
 	if (avail_min != pcm->io_avail_min) {
 		debug2("Changing SW avail min: %zu -> %zu", pcm->io_avail_min, avail_min);
 		pcm->io_avail_min = avail_min;
+	}
+
+	snd_pcm_uframes_t stop_threshold;
+	snd_pcm_sw_params_get_stop_threshold(params, &stop_threshold);
+	if (stop_threshold >= pcm->io_hw_boundary)
+		stop_threshold = pcm->io_hw_boundary;
+	if (stop_threshold != pcm->io_stop_threshold) {
+		debug2("Changing SW stop threshold: %zu -> %zu", pcm->io_stop_threshold, stop_threshold);
+		pcm->io_stop_threshold = stop_threshold;
+	}
+
+	int period_event;
+	snd_pcm_sw_params_get_period_event(params, &period_event);
+	if (period_event != pcm->io_period_event) {
+		debug2("Changing SW period event: %d -> %d", pcm->io_period_event, period_event);
+		pcm->io_period_event = period_event;
 	}
 
 	return 0;
@@ -713,12 +901,10 @@ static int bluealsa_prepare(snd_pcm_ioplug_t *io) {
 	/* initialize ring buffer */
 	pcm->io_hw_ptr = 0;
 
-	/* The ioplug allocates and configures its channel area buffer when the
-	 * HW parameters are fixed, but after calling bluealsa_hw_params(). So,
-	 * this is the earliest opportunity for us to safely cache the ring
-	 * buffer start address. */
-	const snd_pcm_channel_area_t *areas = snd_pcm_ioplug_mmap_areas(io);
-	pcm->io_hw_buffer = (char *)areas->addr + areas->first / 8;
+	if (pcm->io_silence_size >= pcm->io_hw_boundary) {
+		/* Special case: fill buffer with silence.*/
+		snd_pcm_format_set_silence(io->format, pcm->io_hw_buffer,  io->buffer_size * io->channels);
+	}
 
 	if (io->stream == SND_PCM_STREAM_PLAYBACK) {
 		/* Indicate that our PCM is ready for IO, even though is is not 100%
@@ -1107,8 +1293,7 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 				ready = false;
 				break;
 			case SND_PCM_STATE_PREPARED:
-				/* capture poll should block forever */
-				if (io->stream == SND_PCM_STREAM_CAPTURE) {
+				if ((snd_pcm_uframes_t)avail < pcm->io_avail_min) {
 					ready = false;
 					*revents = 0;
 				}
@@ -1116,7 +1301,8 @@ static int bluealsa_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd,
 			case SND_PCM_STATE_RUNNING:
 				if ((snd_pcm_uframes_t)avail < pcm->io_avail_min) {
 					ready = false;
-					*revents = 0;
+					if ((snd_pcm_uframes_t)avail < io->period_size || !pcm->io_period_event)
+						*revents = 0;
 				}
 				break;
 			case SND_PCM_STATE_DRAINING:
@@ -1228,6 +1414,50 @@ static snd_pcm_chmap_t *bluealsa_get_chmap(snd_pcm_ioplug_t *io) {
 	return map;
 }
 
+static snd_pcm_sframes_t bluealsa_transfer(snd_pcm_ioplug_t *io, const snd_pcm_channel_area_t *areas, snd_pcm_uframes_t offset, snd_pcm_uframes_t size) {
+	struct bluealsa_pcm *pcm = io->private_data;
+	int result;
+
+	pthread_mutex_lock(&pcm->mutex);
+
+	if (io->stream == SND_PCM_STREAM_CAPTURE) {
+		result = snd_pcm_areas_copy_wrap(
+					areas,
+					offset,
+					size + offset,
+					pcm->channel_areas,
+					io->appl_ptr % io->buffer_size,
+					io->buffer_size,
+					io->channels,
+					size,
+					io->format);
+	}
+	else {
+		result = snd_pcm_areas_copy_wrap(
+					pcm->channel_areas,
+					io->appl_ptr % io->buffer_size,
+					io->buffer_size,
+					areas,
+					offset,
+					size + offset,
+					io->channels,
+					size,
+					io->format);
+
+		if (result > 0) {
+			/* This transfer may have overwritten part of our silence region */
+			snd_pcm_uframes_t new_appl_ptr = io->appl_ptr + result;
+			if (new_appl_ptr >= pcm->io_hw_boundary)
+				new_appl_ptr -= pcm->io_hw_boundary;
+
+			bluealsa_update_silence_region(io, new_appl_ptr);
+		}
+	}
+	pthread_mutex_unlock(&pcm->mutex);
+
+	return result < 0 ? result : (snd_pcm_sframes_t) size;
+}
+
 static const snd_pcm_ioplug_callback_t bluealsa_callback = {
 	.start = bluealsa_start,
 	.stop = bluealsa_stop,
@@ -1246,6 +1476,7 @@ static const snd_pcm_ioplug_callback_t bluealsa_callback = {
 	.poll_revents = bluealsa_poll_revents,
 	.query_chmaps = bluealsa_query_chmaps,
 	.get_chmap = bluealsa_get_chmap,
+	.transfer = bluealsa_transfer,
 };
 
 static int str2bdaddr(const char *str, bdaddr_t *ba) {
@@ -1623,7 +1854,6 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 #ifdef SND_PCM_IOPLUG_FLAG_BOUNDARY_WA
 	pcm->io.flags |= SND_PCM_IOPLUG_FLAG_BOUNDARY_WA;
 #endif
-	pcm->io.mmap_rw = 1;
 	pcm->io.callback = &bluealsa_callback;
 	pcm->io.private_data = pcm;
 
