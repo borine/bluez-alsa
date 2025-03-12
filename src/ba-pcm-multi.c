@@ -257,7 +257,7 @@ void ba_pcm_multi_free(struct ba_pcm_multi *multi) {
  * @return true if successful.
  */
 bool ba_pcm_multi_add_client(struct ba_pcm_multi *multi, int pcm_fd, int control_fd) {
-	int rv;
+	int rv = 0;
 	bool close_fd_on_fail = false;
 
 	if (multi->client_count == BA_MULTI_MAX_CLIENTS)

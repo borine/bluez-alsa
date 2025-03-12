@@ -375,7 +375,7 @@ static int bluealsa_elem_update_list_add(struct bluealsa_ctl *ctl,
 	tmp[ctl->elem_update_list_size].pcm = elem->pcm;
 	tmp[ctl->elem_update_list_size].event_mask = mask;
 	*stpncpy(tmp[ctl->elem_update_list_size].name, elem->name,
-			sizeof(tmp[ctl->elem_update_list_size].name) - 1) = '\0';
+			sizeof(tmp[ctl->elem_update_list_size].name)) = '\0';
 	tmp[ctl->elem_update_list_size].index = elem->index;
 
 	ctl->elem_update_list = tmp;

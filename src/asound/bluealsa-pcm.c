@@ -1976,7 +1976,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 	const char *hwcompat = NULL;
 	long delay = 0;
 	struct bluealsa_pcm *pcm;
-	int ret;
+	int ret = 0;
 
 	snd_config_iterator_t pos, next;
 	snd_config_for_each(pos, next, conf) {

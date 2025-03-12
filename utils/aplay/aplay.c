@@ -826,7 +826,7 @@ static void *io_worker_routine(struct io_worker *w) {
 			timeout = 0;
 
 #if WITH_LIBSAMPLERATE
-		size_t resample_delay_frames;
+		size_t resample_delay_frames = 0;
 		if (use_resampler) {
 			resample_delay_frames = ffb_len_out(write_buffer) / w->ba_pcm.channels;
 			resample_delay_frames /= resampler_current_rate_ratio(resampler);
