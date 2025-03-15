@@ -315,7 +315,7 @@ bool resampler_update_rate_ratio(
 		resampler->last_input_frames = resampler->input_frames;
 	}
 
-	if (resampler->target_delay == 0) {
+	if (resampler->target_delay == 0 && !is_timespec_zero(&resampler->reset_ts)) {
 		/* Do not restart adaptive resampling until the delay has had time to
 		 * settle to a new value. */
 		struct timespec ts_wait;
@@ -331,27 +331,27 @@ bool resampler_update_rate_ratio(
 				resampler->src_data.src_ratio =
 					resampler->nominal_rate_ratio - RESAMPLER_STEP_SIZE * RESAMPLER_MAX_STEPS;
 				resampler->rate_ratio_step_count = RESAMPLER_MAX_STEPS;
-				ret = true;
 			}
 			else if (delay < resampler->min_target) {
 				resampler->target_delay = resampler->min_target;
 				resampler->src_data.src_ratio =
 					resampler->nominal_rate_ratio + RESAMPLER_STEP_SIZE * RESAMPLER_MAX_STEPS;
 				resampler->rate_ratio_step_count = RESAMPLER_MAX_STEPS;
-				ret = true;
 			}
 			else {
+				/* Once the delay has returned within the permitted target
+				 * range, zero the reset timestamp to indicate that normal
+				 * adaptive resampling has re-started */
+				resampler->reset_ts.tv_sec = 0;
+				resampler->reset_ts.tv_nsec = 0;
 				resampler->target_delay = delay;
-				resampler->delay_diff = delay - resampler->target_delay;
 			}
-			resampler->reset_ts.tv_sec = 0;
-			resampler->reset_ts.tv_nsec = 0;
-#if DEBUG
+			resampler->delay_diff = delay - resampler->target_delay;
 			debug("Adaptive resampling enabled: target delay = %.1fms",
 					1000.0 * resampler->target_delay / resampler->in_rate);
-#endif
+			return true;
 		}
-		return ret;
+		return false;
 	}
 
 	snd_pcm_sframes_t delay_diff = delay - resampler->target_delay;
@@ -361,8 +361,11 @@ bool resampler_update_rate_ratio(
 	if (delay_diff_abs > resampler->max_delay_diff) {
 		/* Reset the resampler if not already done. */
 		if (is_timespec_zero(&resampler->reset_ts)) {
-			debug("Resetting resampler: Delay difference limit exceeded: %zu > %zu",
-					delay_diff_abs, resampler->max_delay_diff);
+#if DEBUG
+			if (resampler->target_delay != 0)
+				debug("Resetting resampler: Delay difference limit exceeded: %zu > %zu",
+						delay_diff_abs, resampler->max_delay_diff);
+#endif
 			resampler_reset(resampler);
 			return true;
 		}

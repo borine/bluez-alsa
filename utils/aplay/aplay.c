@@ -598,15 +598,8 @@ static void *io_worker_routine(struct io_worker *w) {
 				const size_t discard_bytes = MIN(buffered, ffb_blen_out(&read_buffer));
 				const size_t discard_samples = discard_bytes / pcm_format_size;
 				ffb_shift(&read_buffer, discard_samples);
-				if (alsa_pcm_is_open(&w->alsa_pcm)) {
+				if (alsa_pcm_is_open(&w->alsa_pcm))
 					warn("Dropping PCM frames: %zu", discard_samples / w->ba_pcm.channels);
-#if WITH_LIBSAMPLERATE
-					if (use_resampler) {
-						debug("Resetting resampler: Dropped PCM frames");
-						resampler_reset(resampler);
-					}
-#endif
-				}
 			}
 
 			ssize_t ret;
