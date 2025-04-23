@@ -172,7 +172,7 @@ OPTIONS
     In order to use this feature, BlueALSA PCM can not use software volume.
     The default is ``default``.
 
---mixer-name=NAME
+--mixer-control=NAME
     Set the name of the ALSA simple mixer control to use.
     The default is ``Master``.
 
@@ -260,7 +260,7 @@ adjustment will have been applied to the PCM stream within the **bluealsad**
 daemon; so **bluealsa-aplay** does not operate the mixer control in this case.
 
 When using ``--volume=none`` or ``--volume=software``, then the mixer options
-``--mixer-device``, ``--mixer-name`` and ``--mixer-index`` are ignored, and
+``--mixer-device``, ``--mixer-control`` and ``--mixer-index`` are ignored, and
 **bluealsa-aplay** will not operate any mixer controls, even if some other
 application changes the PCM volume mode to native while in use.
 
@@ -409,7 +409,7 @@ above).
 ::
 
     bluealsa-aplay --pcm=default 94:B8:6D:AF:CD:EF F8:87:F1:B8:30:85 &
-    bluealsa-aplay --pcm=default:USB --mixer-device=hw:USB --mixer-name=Speaker C8:F7:33:66:F0:DE &
+    bluealsa-aplay --pcm=default:USB --mixer-device=hw:USB --mixer-control=Speaker C8:F7:33:66:F0:DE &
 
 Such setup will route ``94:B8:6D:AF:CD:EF`` and ``F8:87:F1:B8:30:85`` Bluetooth
 devices to the ``default`` ALSA playback PCM device and ``C8:F7:33:66:F0:DE``
