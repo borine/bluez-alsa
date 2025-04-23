@@ -171,6 +171,10 @@ OPTIONS
     and volume level.
     In order to use this feature, BlueALSA PCM can not use software volume.
     The default is ``default``.
+    Note that **bluealsa-aplay** does not assume that the mixer device has the
+    same name, or is on the same card, as the PCM device. If this option is not
+    given then it will use ``default`` as the mixer device no matter which name
+    is given with the **--pcm=** option.
 
 --mixer-control=NAME
     Set the name of the ALSA simple mixer control to use.
@@ -264,10 +268,11 @@ When using ``--volume=none`` or ``--volume=software``, then the mixer options
 **bluealsa-aplay** will not operate any mixer controls, even if some other
 application changes the PCM volume mode to native while in use.
 
-When using ``--volume=auto`` or ``--volume=mixer`` the ALSA mixer control will
-be operated only when the PCM stream is active, (i.e., the remote device is
-sending audio). If a connected remote device requests a volume change when no
-active stream is playing, then **bluealsa-aplay** will ignore that request.
+When native volume control is enabled (using either ``--volume=auto`` or
+``--volume=mixer``) then the ALSA mixer control will be operated only when the
+PCM stream is active, (i.e., the remote device is sending audio). If a
+connected remote device requests a volume change when no active stream is
+playing, then **bluealsa-aplay** will ignore that request.
 When the audio stream starts then **bluealsa-aplay** will change the Bluetooth
 volume to match the current setting of the ALSA mixer control.
 
