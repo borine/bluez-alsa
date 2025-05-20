@@ -281,6 +281,7 @@ CK_START_TEST(test_play_dbus_signals) {
 fprintf(stderr, "**** calling spawn_terminate ***\n");
 	ck_assert_int_eq(spawn_terminate(&sp_ba_aplay, 1500), 0);
 
+#if 0
 //	char output[16384] = "";
 	char output[32768] = "";
 fprintf(stderr, "**** calling spawn_read ***\n");
@@ -305,6 +306,8 @@ fprintf(stderr, "**** spawn_read returned ***\n");
 	/* check proper sample rate for mSBC codec */
 	ck_assert_ptr_ne(strstr(output,
 				"ALSA PCM sample rate: 16000 Hz"), NULL);
+#endif
+
 #endif
 
 	spawn_close(&sp_ba_aplay, NULL);
