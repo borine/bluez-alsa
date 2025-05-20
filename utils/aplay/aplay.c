@@ -504,6 +504,15 @@ static void *io_worker_routine(struct io_worker *w) {
 
 	int pcm_flags = 0;
 
+	/* Block all signals in the worker thread because we are using thread
+	 * cancellation and we do not want any interference from signal handlers. */
+	sigset_t sigset;
+	sigfillset(&sigset);
+	if ((errno = pthread_sigmask(SIG_SETMASK, &sigset, NULL)) != 0) {
+		SNDERR("Thread signal mask error: %s", strerror(errno));
+		goto fail;
+	}
+
 	/* Cancellation should be possible only in the carefully selected place
 	 * in order to prevent memory leaks and resources not being released. */
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
