@@ -279,7 +279,8 @@ CK_START_TEST(test_play_dbus_signals) {
 				"-v", "-v",
 				NULL), -1);
 fprintf(stderr, "**** calling spawn_terminate ***\n");
-	ck_assert_int_eq(spawn_terminate(&sp_ba_aplay, 1500), 0);
+//	ck_assert_int_eq(spawn_terminate(&sp_ba_aplay, 1500), 0);
+	ck_assert_int_eq(spawn_terminate(&sp_ba_aplay, 500), 0);
 
 #if 0
 //	char output[16384] = "";
