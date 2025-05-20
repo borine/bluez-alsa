@@ -1555,23 +1555,28 @@ int main(int argc, char *argv[]) {
 			continue;
 
 		if (fds[0].revents & POLLIN)
+{debug("**** main_loop_quit_event_fd got POLLIN ****");
 			break;
-
+}
 		if (ba_dbus_connection_poll_dispatch(&dbus_ctx, &fds[1], nfds))
 			while (dbus_connection_dispatch(dbus_ctx.conn) == DBUS_DISPATCH_DATA_REMAINS)
 				continue;
 
 	}
 
+debug("**** stopping workers ****");
 	for (size_t i = 0; i < workers_size; i++)
 		if (workers[i] != NULL)
 			io_worker_stop(workers[i]);
 	/* When all workers are stopped, we can safely free the resources
 	 * in a lockless manner without risking any race conditions. */
+debug("**** freeing resources ****");
 	for (size_t i = 0; i < workers_size; i++)
 		if (workers[i] != NULL)
 			io_worker_destroy(workers[i]);
 
+debug("**** freeing dbus connection context ****");
 	ba_dbus_connection_ctx_free(&dbus_ctx);
+debug("**** freeing terminating ****");
 	return EXIT_SUCCESS;
 }

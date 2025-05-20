@@ -188,6 +188,7 @@ static void *spawn_timeout_thread(void *arg) {
 	struct spawn_process *sp = arg;
 
 	usleep(sp->term_delay_msec * 1000);
+fprintf(stderr, "**** sending SIGTERM ****\n");
 	kill(sp->pid, SIGTERM);
 
 	return NULL;
