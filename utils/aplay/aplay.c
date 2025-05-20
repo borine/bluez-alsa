@@ -119,6 +119,7 @@ static size_t workers_size = ARRAYSIZE(workers);
 
 static int main_loop_quit_event_fd = -1;
 static void main_loop_stop(int sig) {
+debug("**** main_loop_stop(%d) ****", sig);
 	eventfd_write(main_loop_quit_event_fd, sig);
 }
 

@@ -9,7 +9,8 @@ deadlock:dbus_bus_get_private
 # 2. It does not like calling dbus_connection_send_with_reply_and_block()
 #    while other thread is calling dbus_connection_dispatch().
 race:dbus_connection_dispatch
-deadlock:dbus_connection_send_with_reply_and_block
+race:dbus_connection_send_with_reply_and_block
+race:dbus_counter_adjust_unix_fd
 race:dbus_watch_handle
 
 # Do not report any issues within dbus-daemon. It is used internally by
