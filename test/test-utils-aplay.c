@@ -43,6 +43,7 @@ static int spawn_bluealsa_aplay(struct spawn_process *sp, ...) {
 
 	va_end(ap);
 
+fprintf(stderr, "**** spawning bluealsa-aplay ****\n");
 	const int flags = SPAWN_FLAG_REDIRECT_STDOUT | SPAWN_FLAG_REDIRECT_STDERR;
 	return spawn(sp, argv, NULL, flags);
 }
@@ -277,10 +278,13 @@ CK_START_TEST(test_play_dbus_signals) {
 				"--volume=none",
 				"-v", "-v",
 				NULL), -1);
+fprintf(stderr, "**** calling spawn_terminate ***\n");
 	spawn_terminate(&sp_ba_aplay, 1500);
 
 	char output[16384] = "";
+fprintf(stderr, "**** calling spawn_read ***\n");
 	ck_assert_int_gt(spawn_read(&sp_ba_aplay, NULL, 0, output, sizeof(output)), 0);
+fprintf(stderr, "**** spawn_read returned ***\n");
 
 #if ENABLE_HFP_CODEC_SELECTION && DEBUG
 	/* With codec selection support, codec is not selected right away. */
