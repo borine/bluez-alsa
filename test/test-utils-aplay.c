@@ -362,6 +362,7 @@ int main(int argc, char *argv[]) {
 
 	suite_add_tcase(s, tc);
 
+	tcase_add_test(tc, test_play_dbus_signals);
 	tcase_add_test(tc, test_help);
 	tcase_add_test(tc, test_configuration);
 	tcase_add_test(tc, test_list_devices);
@@ -369,7 +370,6 @@ int main(int argc, char *argv[]) {
 	tcase_add_test(tc, test_play_all);
 	tcase_add_test(tc, test_play_single_audio);
 	tcase_add_test(tc, test_play_mixer_setup);
-	tcase_add_test(tc, test_play_dbus_signals);
 #if WITH_LIBSAMPLERATE
 	tcase_add_test(tc, test_play_resampler);
 #endif
