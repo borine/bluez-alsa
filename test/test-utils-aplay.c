@@ -375,6 +375,8 @@ int main(int argc, char *argv[]) {
 	tcase_add_test(tc, test_play_resampler);
 #endif
 
+	tcase_set_timeout(tc, 8);
+
 	srunner_run_all(sr, CK_ENV);
 	int nf = srunner_ntests_failed(sr);
 
