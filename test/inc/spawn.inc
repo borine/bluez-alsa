@@ -167,19 +167,15 @@ ssize_t spawn_read(struct spawn_process *sp,
 		.buffer = stderr_buf, .size = stderr_size };
 	pthread_t t_stderr;
 
-fprintf(stderr, "**** creating ff_stdout thread ****\n");
 	if (sp->f_stdout != NULL)
 		pthread_create(&t_stdout, NULL, span_io_forwarder_thread, &ff_stdout);
-fprintf(stderr, "**** creating ff_stderr thread ****\n");
 	if (sp->f_stderr != NULL)
 		pthread_create(&t_stderr, NULL, span_io_forwarder_thread, &ff_stderr);
 
 	if (sp->f_stdout != NULL)
 		pthread_join(t_stdout, NULL);
-fprintf(stderr, "**** ff_stdout thread terminated****\n");
 	if (sp->f_stderr != NULL)
 		pthread_join(t_stderr, NULL);
-fprintf(stderr, "**** ff_stderr thread terminated****\n");
 
 	return stdout_size - ff_stdout.size + stderr_size - ff_stderr.size;
 }
@@ -188,7 +184,6 @@ static void *spawn_timeout_thread(void *arg) {
 	struct spawn_process *sp = arg;
 
 	usleep(sp->term_delay_msec * 1000);
-fprintf(stderr, "**** sending SIGTERM ****\n");
 	kill(sp->pid, SIGTERM);
 
 	return NULL;

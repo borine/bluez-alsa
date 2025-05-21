@@ -43,7 +43,6 @@ static int spawn_bluealsa_aplay(struct spawn_process *sp, ...) {
 
 	va_end(ap);
 
-fprintf(stderr, "**** spawning bluealsa-aplay ****\n");
 	const int flags = SPAWN_FLAG_REDIRECT_STDOUT | SPAWN_FLAG_REDIRECT_STDERR;
 	return spawn(sp, argv, NULL, flags);
 }
@@ -278,16 +277,10 @@ CK_START_TEST(test_play_dbus_signals) {
 				"--volume=none",
 				"-v", "-v",
 				NULL), -1);
-fprintf(stderr, "**** calling spawn_terminate ***\n");
-	ck_assert_int_eq(spawn_terminate(&sp_ba_aplay, 1500), 0);
-//	ck_assert_int_eq(spawn_terminate(&sp_ba_aplay, 500), 0);
+	spawn_terminate(&sp_ba_aplay, 1500);
 
-#if 0
-//	char output[16384] = "";
-	char output[32768] = "";
-fprintf(stderr, "**** calling spawn_read ***\n");
+	char output[16384] = "";
 	ck_assert_int_gt(spawn_read(&sp_ba_aplay, NULL, 0, output, sizeof(output)), 0);
-fprintf(stderr, "**** spawn_read returned ***\n");
 
 #if ENABLE_HFP_CODEC_SELECTION && DEBUG
 	/* With codec selection support, codec is not selected right away. */
@@ -307,8 +300,6 @@ fprintf(stderr, "**** spawn_read returned ***\n");
 	/* check proper sample rate for mSBC codec */
 	ck_assert_ptr_ne(strstr(output,
 				"ALSA PCM sample rate: 16000 Hz"), NULL);
-#endif
-
 #endif
 
 	spawn_close(&sp_ba_aplay, NULL);
@@ -382,8 +373,6 @@ int main(int argc, char *argv[]) {
 #if WITH_LIBSAMPLERATE
 	tcase_add_test(tc, test_play_resampler);
 #endif
-
-	tcase_set_timeout(tc, 6);
 
 	srunner_run_all(sr, CK_ENV);
 	int nf = srunner_ntests_failed(sr);

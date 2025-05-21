@@ -119,7 +119,6 @@ static size_t workers_size = ARRAYSIZE(workers);
 
 static int main_loop_quit_event_fd = -1;
 static void main_loop_stop(int sig) {
-debug("**** main_loop_stop(%d) ****", sig);
 	eventfd_write(main_loop_quit_event_fd, sig);
 }
 
@@ -504,15 +503,6 @@ static void *io_worker_routine(struct io_worker *w) {
 #endif
 
 	int pcm_flags = 0;
-
-	/* Block all signals in the worker thread because we are using thread
-	 * cancellation and we do not want any interference from signal handlers. */
-	sigset_t sigset;
-	sigfillset(&sigset);
-	if ((errno = pthread_sigmask(SIG_SETMASK, &sigset, NULL)) != 0) {
-		SNDERR("Thread signal mask error: %s", strerror(errno));
-		goto fail;
-	}
 
 	/* Cancellation should be possible only in the carefully selected place
 	 * in order to prevent memory leaks and resources not being released. */
@@ -1565,28 +1555,23 @@ int main(int argc, char *argv[]) {
 			continue;
 
 		if (fds[0].revents & POLLIN)
-{debug("**** main_loop_quit_event_fd got POLLIN ****");
 			break;
-}
+
 		if (ba_dbus_connection_poll_dispatch(&dbus_ctx, &fds[1], nfds))
 			while (dbus_connection_dispatch(dbus_ctx.conn) == DBUS_DISPATCH_DATA_REMAINS)
 				continue;
 
 	}
 
-debug("**** stopping workers ****");
 	for (size_t i = 0; i < workers_size; i++)
 		if (workers[i] != NULL)
 			io_worker_stop(workers[i]);
 	/* When all workers are stopped, we can safely free the resources
 	 * in a lockless manner without risking any race conditions. */
-debug("**** freeing resources ****");
 	for (size_t i = 0; i < workers_size; i++)
 		if (workers[i] != NULL)
 			io_worker_destroy(workers[i]);
 
-debug("**** freeing dbus connection context ****");
 	ba_dbus_connection_ctx_free(&dbus_ctx);
-debug("**** freeing terminating ****");
 	return EXIT_SUCCESS;
 }
