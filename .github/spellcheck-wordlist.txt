@@ -61,6 +61,7 @@ UUID
 UUIDs
 VBR
 WAV
+WBS
 XQ
 
 # Proper Names
@@ -100,6 +101,8 @@ endianness
 enum
 getter
 init
+isoc
+isochronous
 iter
 libs
 middleware
@@ -136,6 +139,7 @@ ABCD
 ABCDEFGHIJKLMNOPQRSTUVWXYZ
 aloader
 amixer
+bAlternateSetting
 AOT
 aplay
 appl
@@ -268,6 +272,9 @@ spandsp
 SRA
 sv
 SysEx
+sys
+sysfs
+syslog
 syslogd
 systemd
 TIOCOUTQ
@@ -279,6 +286,8 @@ uint
 VGM
 VGS
 VTable
+wMaxPacketSize
+Wformat
 writei
 XAPL
 xFFFF
