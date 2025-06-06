@@ -12,6 +12,8 @@
 # include <config.h>
 #endif
 
+#include <stdbool.h>
+
 #include "ba-adapter.h"
 #include "ba-transport.h"
 #include "error.h"
