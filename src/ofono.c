@@ -47,6 +47,7 @@
 #include "dbus.h"
 #include "hci.h"
 #include "ofono-iface.h"
+#include "sco.h"
 #include "utils.h"
 #include "shared/bluetooth-hfp.h"
 #include "shared/defs.h"
@@ -124,8 +125,15 @@ static int ofono_acquire_bt_sco(struct ba_transport *t) {
 #endif
 
 	t->bt_fd = fd;
-	t->mtu_read = t->mtu_write = hci_sco_get_mtu(fd, t->d->a);
 	ba_transport_set_codec(t, codec);
+	if (!ba_transport_sco_get_mtu(t, fd)) {
+		error("Couldn't get SCO link MTU: %s", strerror(errno));
+		if (fd != -1) {
+			shutdown(fd, SHUT_RDWR);
+			close(fd);
+		}
+		goto fail;
+	}
 
 	debug("New oFono SCO link (codec: %#x): %d", codec, fd);
 	ret = 0;
@@ -798,11 +806,15 @@ static void ofono_agent_new_connection(GDBusMethodInvocation *inv, void *userdat
 
 	pthread_mutex_lock(&t->bt_fd_mtx);
 
-	debug("New oFono SCO link (codec: %#x): %d", codec, fd);
-
+	if (!ba_transport_sco_get_mtu(t, fd)) {
+		error("Couldn't get SCO link MTU");
+		pthread_mutex_unlock(&t->bt_fd_mtx);
+		goto fail;
+	}
 	t->bt_fd = fd;
-	t->mtu_read = t->mtu_write = hci_sco_get_mtu(fd, t->d->a);
-	ba_transport_set_codec(t, codec);
+	fd = -1;
+
+	debug("New oFono SCO link (codec: %#x): %d", codec, fd);
 
 	pthread_mutex_unlock(&t->bt_fd_mtx);
 

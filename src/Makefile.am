@@ -55,6 +55,7 @@ libbluealsad_la_SOURCES = \
 	dbus/org.bluez.xml \
 	error.c \
 	h2.c \
+	hci-usb.c \
 	hci.c \
 	io.c \
 	rtp.c \
