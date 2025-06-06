@@ -128,6 +128,7 @@ test_ba_SOURCES = \
 	../src/dbus.c \
 	../src/h2.c \
 	../src/hci.c \
+	../src/hci-usb.c \
 	../src/hfp.c \
 	../src/io.c \
 	../src/sco.c \
@@ -161,6 +162,7 @@ test_io_SOURCES = \
 	../src/dbus.c \
 	../src/h2.c \
 	../src/hci.c \
+	../src/hci-usb.c \
 	../src/hfp.c \
 	../src/io.c \
 	../src/rtp.c \
@@ -212,6 +214,7 @@ test_rfcomm_SOURCES = \
 	../src/dbus.c \
 	../src/h2.c \
 	../src/hci.c \
+	../src/hci-usb.c \
 	../src/hfp.c \
 	../src/io.c \
 	../src/sco.c \
@@ -232,6 +235,7 @@ test_utils_SOURCES = \
 	../src/shared/rt.c \
 	../src/ba-config.c \
 	../src/hci.c \
+	../src/hci-usb.c \
 	../src/utils.c \
 	test-utils.c
 
