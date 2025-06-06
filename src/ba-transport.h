@@ -278,4 +278,6 @@ int ba_transport_set_media_state(
 		struct ba_transport *t,
 		enum bluez_media_transport_state state);
 
+bool ba_transport_sco_get_mtu(struct ba_transport *t, int fd);
+
 #endif

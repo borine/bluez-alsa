@@ -46,6 +46,7 @@ libbluealsad_la_SOURCES = \
 	dbus.c \
 	h2.c \
 	hci.c \
+	hci-usb.c \
 	hfp.c \
 	io.c \
 	rtp.c \
