@@ -67,6 +67,9 @@ struct ba_adapter *ba_adapter_new(int dev_id) {
 	config.adapters[a->hci.dev_id] = a;
 	pthread_mutex_unlock(&config.adapters_mutex);
 
+	if ((a->hci.type & 0x0F) == HCI_USB)
+		a->hci_usb = hci_usb_sco_new(a);
+
 	return a;
 }
 
@@ -154,6 +157,8 @@ void ba_adapter_unref(struct ba_adapter *a) {
 
 	g_hash_table_unref(a->devices);
 	pthread_mutex_destroy(&a->devices_mutex);
+	if (a->hci_usb != NULL)
+		hci_usb_sco_delete(a->hci_usb);
 	free(a);
 }
 

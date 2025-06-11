@@ -478,9 +478,18 @@ __attribute__ ((weak))
 int transport_acquire_bt_sco(struct ba_transport *t) {
 
 	struct ba_device *d = t->d;
+	struct ba_adapter *a = d->a;
 	int fd = -1;
 
-	if ((fd = hci_sco_open(d->a->hci.dev_id)) == -1) {
+	/* BlueALSA can only support 1 active SCO transport stream at a time if
+	 * the adapter uses a USB HCI bus. */
+	if (a->hci_usb != NULL && !hci_usb_sco_grab(a->hci_usb)) {
+		warn("Unable to acquire SCO link, USB adapter busy");
+		errno = EBUSY;
+		return -1;
+	}
+
+	if ((fd = hci_sco_open(a->hci.dev_id)) == -1) {
 		error("Couldn't open SCO socket: %s", strerror(errno));
 		goto fail;
 	}
@@ -516,6 +525,8 @@ int transport_acquire_bt_sco(struct ba_transport *t) {
 	return fd;
 
 fail:
+	if (a->hci_usb != NULL)
+		hci_usb_sco_release(a->hci_usb);
 	if (fd != -1)
 		close(fd);
 	return -1;
@@ -528,6 +539,8 @@ static int transport_release_bt_sco(struct ba_transport *t) {
 	shutdown(t->bt_fd, SHUT_RDWR);
 	close(t->bt_fd);
 	t->bt_fd = -1;
+	if (t->d->a->hci_usb != NULL)
+		hci_usb_sco_release(t->d->a->hci_usb);
 
 	/* Keep the time-stamp when the SCO link has been closed. It will be used
 	 * for calculating close-connect quirk delay in the acquire function. */
@@ -1329,7 +1342,7 @@ int ba_transport_set_media_state(
 bool ba_transport_sco_get_mtu(struct ba_transport *t, int fd) {
 	unsigned int mtu;
 
-	if ((t->d->a->hci.type & 0x0F) == HCI_USB) {
+	if (t->d->a->hci_usb != NULL) {
 		/* USB adapters place an additional constraint on the socket write
 		 * size, which is not considered by the Linux bluetooth socket driver
 		 * when reporting the socket MTU. The reported value is always larger
@@ -1337,7 +1350,8 @@ bool ba_transport_sco_get_mtu(struct ba_transport *t, int fd) {
 		 * more than the true MTU can cause data loss, or even undefined
 		 * behaviour with some adapters. So we need to get the correct
 		 * mtu_write value from the Linux USB subsystem.*/
-		mtu = hci_usb_sco_get_mtu(t->d->a);
+		struct hci_usb_sco *hci = t->d->a->hci_usb;
+		mtu = hci_usb_sco_get_mtu(hci);
 		if (mtu == 0) {
 			/* The USB endpoint is not yet configured. It takes some time
 			 * before the USB endpoint is configured; the length of time seems
@@ -1349,7 +1363,7 @@ bool ba_transport_sco_get_mtu(struct ba_transport *t, int fd) {
 				debug("poll error %s", strerror(err));
 				return false;
 			}
-			mtu = hci_usb_sco_get_mtu(t->d->a);
+			mtu = hci_usb_sco_get_mtu(hci);
 		}
 		if (mtu > 0)
 			debug("USB adjusted SCO MTU: %d: %u", fd, mtu);
