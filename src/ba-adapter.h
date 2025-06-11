@@ -23,6 +23,8 @@
 #include <bluetooth/hci.h>
 #include <bluetooth/hci_lib.h>
 
+#include "hci-usb.h"
+
 /* Data associated with BT adapter. */
 struct ba_adapter {
 
@@ -43,6 +45,9 @@ struct ba_adapter {
 
 	/* memory self-management */
 	int ref_count;
+
+	/* for USB adapters only. */
+	struct hci_usb_sco *hci_usb;
 
 };
 

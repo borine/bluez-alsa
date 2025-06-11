@@ -115,16 +115,24 @@ static void *sco_dispatcher_thread(struct ba_adapter *a) {
 		}
 
 		ba2str(&addr.sco_bdaddr, addrstr);
+		/* BlueALSA can only support 1 active SCO transport stream at a time if
+		 * the adapter uses a USB HCI bus. */
+		if (a->hci_usb != NULL && !hci_usb_sco_grab(a->hci_usb)) {
+			warn("Unable to accept SCO link, USB adapter busy: %s: %d", addrstr, fd);
+			errno = EBUSY;
+			goto cleanup;
+		}
+
 		debug("New incoming SCO link: %s: %d", addrstr, fd);
 
 		if ((d = ba_device_lookup(data.a, &addr.sco_bdaddr)) == NULL) {
 			error("Couldn't lookup device: %s", addrstr);
-			goto cleanup;
+			goto error_cleanup;
 		}
 
 		if ((t = ba_transport_lookup(d, d->bluez_dbus_path)) == NULL) {
 			error("Couldn't lookup transport: %s", d->bluez_dbus_path);
-			goto cleanup;
+			goto error_cleanup;
 		}
 
 #if ENABLE_HFP_CODEC_SELECTION
@@ -133,11 +141,11 @@ static void *sco_dispatcher_thread(struct ba_adapter *a) {
 		if ((codec_id == HFP_CODEC_MSBC || codec_id == HFP_CODEC_LC3_SWB) &&
 				setsockopt(fd, SOL_BLUETOOTH, BT_VOICE, &voice, sizeof(voice)) == -1) {
 			error("Couldn't setup transparent voice: %s", strerror(errno));
-			goto cleanup;
+			goto error_cleanup;
 		}
 		if (read(fd, &voice, 1) == -1) {
 			error("Couldn't authorize SCO connection: %s", strerror(errno));
-			goto cleanup;
+			goto error_cleanup;
 		}
 #endif
 
@@ -148,7 +156,7 @@ static void *sco_dispatcher_thread(struct ba_adapter *a) {
 		if (!ba_transport_sco_get_mtu(t, fd)) {
 			error("Couldn't get SCO link MTU");
 			pthread_mutex_unlock(&t->bt_fd_mtx);
-			goto cleanup;
+			goto error_cleanup;
 		}
 		t->bt_fd = fd;
 		fd = -1;
@@ -158,6 +166,12 @@ static void *sco_dispatcher_thread(struct ba_adapter *a) {
 		ba_transport_pcm_state_set_idle(&t->sco.pcm_spk);
 		ba_transport_pcm_state_set_idle(&t->sco.pcm_mic);
 		ba_transport_start(t);
+
+		goto cleanup;
+
+error_cleanup:
+		if (a->hci_usb != NULL)
+			hci_usb_sco_release(a->hci_usb);
 
 cleanup:
 		if (d != NULL)

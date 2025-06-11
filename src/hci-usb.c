@@ -137,9 +137,39 @@ static unsigned hci_usb_get_alternate_setting(const char *dev_path) {
 	return bAlternateSetting;
 }
 
-unsigned hci_usb_sco_get_mtu(const struct ba_adapter *a) {
+struct hci_usb_sco *hci_usb_sco_new(struct ba_adapter *a) {
+	struct hci_usb_sco *h;
+	if ((h = malloc(sizeof(*h))) == NULL)
+		return NULL;
 
-	assert(a && (a->hci.type & 0x0F) == HCI_USB);
+	h->a = a;
+	h->busy = false;
+	pthread_mutex_init(&h->mutex, NULL);
+
+	return h;
+}
+
+void hci_usb_sco_delete(struct hci_usb_sco *h) {
+	pthread_mutex_destroy(&h->mutex);
+	free(h);
+}
+
+bool hci_usb_sco_grab(struct hci_usb_sco *h) {
+	bool ret = false;
+	pthread_mutex_lock(&h->mutex);
+	if (!h->busy)
+		ret = h->busy = true;
+	pthread_mutex_unlock(&h->mutex);
+	return ret;
+}
+
+void hci_usb_sco_release(struct hci_usb_sco *h) {
+	pthread_mutex_lock(&h->mutex);
+	h->busy = false;
+	pthread_mutex_unlock(&h->mutex);
+}
+
+unsigned hci_usb_sco_get_mtu(const struct hci_usb_sco *h) {
 
 	/* The MTU depends on the USB interface descriptor "Alternate Setting".
 	 * For alternate settings 1 to 5 each HCI frame is fragmented into 3 USB
@@ -167,8 +197,8 @@ unsigned hci_usb_sco_get_mtu(const struct ba_adapter *a) {
 	 * on the fly, according to the number of active SCO streams as each HCI
 	 * frame is processed. So this implementation only works correctly if no
 	 * more than one active SCO stream per USB adapter is allowed. */
-	char device_path[sizeof("/sys/class/bluetooth//device/..") + sizeof(a->hci.name)];
-	sprintf(device_path, "/sys/class/bluetooth/%s/device/..", a->hci.name);
+	char device_path[sizeof("/sys/class/bluetooth//device/..") + sizeof(h->a->hci.name)];
+	sprintf(device_path, "/sys/class/bluetooth/%s/device/..", h->a->hci.name);
 
 	unsigned mtu = 0;
 	switch (hci_usb_get_alternate_setting(device_path)) {
