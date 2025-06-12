@@ -278,4 +278,6 @@ int ba_transport_set_a2dp_state(
 		struct ba_transport *t,
 		enum bluez_a2dp_transport_state state);
 
+bool ba_transport_sco_get_mtu(struct ba_transport *t, int fd);
+
 #endif
