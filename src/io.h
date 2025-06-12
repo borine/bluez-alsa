@@ -39,6 +39,8 @@ struct io_poll {
 	bool draining;
 	/* keep-alive and drain timeout */
 	int timeout;
+	/* true when PCM FIFO is draining */
+	bool drain;
 };
 
 ssize_t io_bt_read(
