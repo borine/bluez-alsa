@@ -239,6 +239,7 @@ libdbus
 libldac
 libopenaptx
 LLAC
+longjmp
 LTP
 MPF
 MPS
@@ -292,6 +293,9 @@ VTable
 wMaxPacketSize
 Wformat
 writei
+Wclobbered
+Werror
+Wextra
 XAPL
 xFFFF
 XHSMICMUTE
