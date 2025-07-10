@@ -147,7 +147,15 @@ static int test_pcm_open(struct spawn_process *sp_ba_mock, snd_pcm_t **pcm,
 	if (pcm_hwcompat != NULL)
 		snprintf(name, sizeof(name), "%s,HWCOMPAT=%s", dev, pcm_hwcompat);
 
-	return snd_pcm_open(pcm, name, stream, 0);
+	int ret = snd_pcm_open(pcm, name, stream, 0);
+	if (ret == -EBUSY &&
+			stream == SND_PCM_STREAM_CAPTURE &&
+			pcm_hwcompat != NULL &&
+			strcmp(pcm_hwcompat, "busy") == 0) {
+		usleep(50000);
+		ret = snd_pcm_open(pcm, name, stream, 0);
+	}
+	return ret;
 }
 
 static int test_pcm_close(struct spawn_process *sp_ba_mock, snd_pcm_t *pcm) {
