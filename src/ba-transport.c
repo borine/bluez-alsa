@@ -43,6 +43,7 @@
 #include "bluez-iface.h"
 #include "bluez.h"
 #include "hci.h"
+#include "hci-usb.h"
 #include "hfp.h"
 #include "midi.h"
 #include "sco.h"
@@ -469,9 +470,18 @@ __attribute__ ((weak))
 int transport_acquire_bt_sco(struct ba_transport *t) {
 
 	struct ba_device *d = t->d;
+	struct ba_adapter *a = d->a;
 	int fd = -1;
 
-	if ((fd = hci_sco_open(d->a->hci.dev_id)) == -1) {
+	/* BlueALSA can only support 1 active SCO transport stream at a time if
+	 * the adapter uses a USB HCI bus. */
+	if (a->hci_usb != NULL && !hci_usb_sco_grab(a->hci_usb)) {
+		warn("Unable to acquire SCO link, USB adapter busy");
+		errno = EBUSY;
+		return -1;
+	}
+
+	if ((fd = hci_sco_open(a->hci.dev_id)) == -1) {
 		error("Couldn't open SCO socket: %s", strerror(errno));
 		goto fail;
 	}
@@ -497,12 +507,18 @@ int transport_acquire_bt_sco(struct ba_transport *t) {
 
 	debug("New SCO link: %s: %d", batostr_(&d->addr), fd);
 
-	t->mtu_read = t->mtu_write = hci_sco_get_mtu(fd, d->a);
+	if (!ba_transport_sco_get_mtu(t, fd)) {
+		error("Couldn't get SCO link MTU: %s", strerror(errno));
+		goto fail;
+	}
+
 	t->bt_fd = fd;
 
 	return fd;
 
 fail:
+	if (a->hci_usb != NULL)
+		hci_usb_sco_release(a->hci_usb);
 	if (fd != -1)
 		close(fd);
 	return -1;
@@ -515,6 +531,8 @@ static int transport_release_bt_sco(struct ba_transport *t) {
 	shutdown(t->bt_fd, SHUT_RDWR);
 	close(t->bt_fd);
 	t->bt_fd = -1;
+	if (t->d->a->hci_usb != NULL)
+		hci_usb_sco_release(t->d->a->hci_usb);
 
 	/* Keep the time-stamp when the SCO link has been closed. It will be used
 	 * for calculating close-connect quirk delay in the acquire function. */
@@ -1299,4 +1317,43 @@ int ba_transport_set_a2dp_state(
 	}
 
 	return 0;
+}
+
+bool ba_transport_sco_get_mtu(struct ba_transport *t, int fd) {
+	unsigned int mtu;
+
+	if (t->d->a->hci_usb != NULL) {
+		/* USB adapters place an additional constraint on the socket write
+		 * size, which is not considered by the Linux bluetooth socket driver
+		 * when reporting the socket MTU. The reported value is always larger
+		 * than than the true MTU, so this is safe for mtu_read, but writing
+		 * more than the true MTU can cause data loss, or even undefined
+		 * behaviour with some adapters. So we need to get the correct
+		 * mtu_write value from the Linux USB subsystem.*/
+		struct hci_usb_sco *hci = t->d->a->hci_usb;
+		mtu = hci_usb_sco_get_mtu(hci);
+		if (mtu == 0) {
+			/* The USB endpoint is not yet configured. It takes some time
+			 * before the USB endpoint is configured; the length of time seems
+			 * to vary quite widely. So we wait up to 100ms, or until the
+			 * first incoming packet is ready, before trying again. */
+			struct pollfd pfd = { fd, POLLIN, 0, };
+			int err = poll(&pfd, 1, 100);
+			if (err == -1) {
+				debug("poll error %s", strerror(err));
+				return false;
+			}
+			mtu = hci_usb_sco_get_mtu(hci);
+		}
+		if (mtu > 0)
+			debug("USB adjusted SCO MTU: %d: %u", fd, mtu);
+		else
+			error("No configured isochronous endpoint found");
+	}
+	else {
+		mtu = hci_sco_get_mtu(fd);
+		debug("SCO MTU: %d: %u", fd, mtu);
+	}
+	t->mtu_write = t->mtu_read = mtu;
+	return mtu > 0;
 }

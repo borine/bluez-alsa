@@ -37,6 +37,7 @@ bluealsad_mock_SOURCES = \
 	../../src/dbus.c \
 	../../src/h2.c \
 	../../src/hci.c \
+	../../src/hci-usb.c \
 	../../src/hfp.c \
 	../../src/io.c \
 	../../src/rtp.c \
