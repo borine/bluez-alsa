@@ -1,5 +1,34 @@
 # Bluetooth Audio ALSA Backend
 
+> [!IMPORTANT]
+> This repository contains experimental code testing ideas for enhancements to
+> BlueALSA. The code is not fully tested and not yet ready for submitting
+> upstream. None of the branches are stable, and may be force-pushed at any
+> time.
+>
+> At present, the proposed enhancements collected together in the `main` branch
+> are:
+>
+> 1. Support for multiple programs to connect to the same BlueALSA PCM
+>    simultaneously, with mixing of the streams for playback and duplication of
+>    the streams for capture (from branch `multi-client`). Must be enabled at
+>    run time with ``bluealsad --multi-client``.
+>    This feature has now been submitted upstream as
+>    [PR #762](https://github.com/arkq/bluez-alsa/pull/762)
+>
+> 1. Improved support for SCO profiles with USB adapters (from branch
+>    `sco-sysfs`). Obtains the configuration of the USB isochronous endpoint
+>    used by the HCI for a SCO audio link from the kernel `sysfs` interface.
+>    This ensures that the correct message payload size is used when writing
+>    encoded audio to the HCI.
+>
+> 1. Support for additional ALSA PCM sw params (from branch `sw-params`):
+>    * `period_event`
+>    * `stop_threshold`
+>    * `silence_size` and `silence_threshold`
+
+--------------------------------------------------
+
 > [!WARNING]
 > The latest source uses new names for some core components:
 >
