@@ -920,7 +920,7 @@ CK_START_TEST(test_playback_pause) {
 		ck_assert_int_eq(snd_pcm_state_runtime(pcm), SND_PCM_STATE_RUNNING);
 
 		/* wait a little bit */
-		usleep(3 * period_time / 2);
+		usleep(2 * period_time);
 
 		/* check resume: more available frames, lower delay */
 		ck_assert_int_gt(snd_pcm_avail(pcm), frames);
