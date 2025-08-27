@@ -174,6 +174,8 @@ struct ba_transport {
 					const struct a2dp_sep * sep;
 					/* selected codec configuration */
 					a2dp_t configuration;
+					/* can the codec configuration be changed ? */
+					bool reconfigurable;
 				} a2dp;
 #if ENABLE_ASHA
 				struct {
@@ -311,6 +313,10 @@ uint32_t ba_transport_get_codec(
 void ba_transport_set_codec(
 		struct ba_transport *t,
 		uint32_t codec_id);
+
+void ba_transport_a2dp_set_reconfigurable(
+		struct ba_transport *t,
+		bool reconfigurable);
 
 int ba_transport_start(struct ba_transport *t);
 int ba_transport_stop(struct ba_transport *t);
