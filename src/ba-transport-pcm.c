@@ -741,6 +741,20 @@ int ba_transport_pcm_get_hardware_volume(
 }
 
 /**
+ * Synchronize PCM codec reconfigurable property.
+ *
+ * This function notifies D-Bus clients. */
+int ba_transport_pcm_reconfigurable_sync(
+		struct ba_transport_pcm *pcm,
+		unsigned int update_mask) {
+
+	/* Notify all connected D-Bus clients. */
+	bluealsa_dbus_pcm_update(pcm, update_mask);
+
+	return 0;
+}
+
+/**
  * Get PCM playback/capture cumulative delay. */
 int ba_transport_pcm_delay_get(const struct ba_transport_pcm *pcm) {
 

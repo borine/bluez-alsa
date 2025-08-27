@@ -257,6 +257,10 @@ int ba_transport_pcm_volume_sync(
 		struct ba_transport_pcm *pcm,
 		unsigned int update_mask);
 
+int ba_transport_pcm_reconfigurable_sync(
+		struct ba_transport_pcm *pcm,
+		unsigned int update_mask);
+
 int ba_transport_pcm_get_hardware_volume(
 		const struct ba_transport_pcm *pcm);
 
