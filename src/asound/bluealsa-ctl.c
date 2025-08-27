@@ -47,6 +47,7 @@ enum ctl_elem_type {
 	CTL_ELEM_TYPE_CODEC,
 	CTL_ELEM_TYPE_DELAY_SYNC,
 	CTL_ELEM_TYPE_BATTERY,
+	CTL_ELEM_TYPE_RECONF,
 };
 
 /**
@@ -131,6 +132,8 @@ struct bluealsa_ctl {
 	bool show_delay_sync;
 	/* if true, show battery level indicator */
 	bool show_battery;
+	/* if true, show A2DP reconfigurability switch */
+	bool show_reconf;
 	/* if true, append BT transport type to element names */
 	bool show_bt_transport;
 	/* if true, this mixer is for a single Bluetooth device */
@@ -143,6 +146,11 @@ struct bluealsa_ctl {
 static const char *soft_volume_names[] = {
 	"pass-through",
 	"software",
+};
+
+static const char *reconf_names[] = {
+	"no",
+	"yes",
 };
 
 static int str2bdaddr(const char *str, bdaddr_t *ba) {
@@ -186,8 +194,10 @@ static int bluealsa_elem_cmp(const void *p1, const void *p2) {
 		return rv;
 	if (!(e1->type == CTL_ELEM_TYPE_CODEC ||
 				e1->type == CTL_ELEM_TYPE_BATTERY ||
+				e1->type == CTL_ELEM_TYPE_RECONF ||
 				e2->type == CTL_ELEM_TYPE_CODEC ||
-				e2->type == CTL_ELEM_TYPE_BATTERY))
+				e2->type == CTL_ELEM_TYPE_BATTERY ||
+				e2->type == CTL_ELEM_TYPE_RECONF))
 		if ((rv = e1->playback - e2->playback) != 0)
 			return -rv;
 	if ((rv = e1->type - e2->type) != 0)
@@ -471,9 +481,10 @@ static const char * transport2str(unsigned int transport) {
 }
 
 static int parse_extended(const char *extended,
-		bool *show_codec, bool *show_vol_mode, bool *show_delay_sync, bool *show_battery) {
+		bool *show_codec, bool *show_vol_mode, bool *show_delay_sync,
+		bool *show_battery, bool *show_reconf) {
 
-	bool codec = false, vol_mode = false, sync = false, battery = false;
+	bool codec = false, vol_mode = false, sync = false, battery = false, reconf = false;
 	int ret = 0;
 
 	switch (snd_config_get_bool_ascii(extended)) {
@@ -484,6 +495,7 @@ static int parse_extended(const char *extended,
 		vol_mode = true;
 		sync = true;
 		battery = true;
+		reconf = true;
 		break;
 	default: {
 		char *next, *ptr = NULL;
@@ -499,6 +511,8 @@ static int parse_extended(const char *extended,
 				sync = true;
 			else if (strcasecmp(next, "battery") == 0)
 				battery = true;
+			else if (strcasecmp(next, "reconfig") == 0)
+				reconf = true;
 			else {
 				ret = -1;
 				break;
@@ -511,6 +525,7 @@ static int parse_extended(const char *extended,
 		*show_vol_mode = vol_mode;
 		*show_delay_sync = sync;
 		*show_battery = battery;
+		*show_reconf = reconf;
 	}
 
 	return ret;
@@ -537,7 +552,16 @@ static void bluealsa_elem_set_name(struct bluealsa_ctl *ctl, struct ctl_elem *el
 
 		const size_t name_len = strlen(name);
 		/* max name length with reserved space for ALSA suffix */
-		int len = sizeof(elem->name) - 16 - 1;
+		int len = sizeof(elem->name) - 1;
+		switch (elem->type) {
+		case CTL_ELEM_TYPE_CODEC:
+		case CTL_ELEM_TYPE_RECONF:
+			len -= sizeof(" Enum") - 1;
+			break;
+		default:
+			len -= sizeof(" Playback Volume") - 1;
+			break;
+		}
 		char no[16] = "";
 
 		if (with_device_id) {
@@ -549,11 +573,15 @@ static void bluealsa_elem_set_name(struct bluealsa_ctl *ctl, struct ctl_elem *el
 		size_t label_max_len = sizeof(" A2DP") - 1;
 		if (ctl->show_bt_transport)
 			label_max_len = sizeof(" SCO-HFP-AG") - 1;
-		if (ctl->show_vol_mode)
+		else if (ctl->show_codec)
+			label_max_len += sizeof(" Codec") - 1;
+		else if (ctl->show_vol_mode)
 			label_max_len += sizeof(" Mode") - 1;
 		else if (ctl->show_delay_sync)
 			label_max_len += sizeof(" Sync") - 1;
-		if (ctl->show_battery)
+		if (ctl->show_reconf)
+			label_max_len = MAX(label_max_len, sizeof(" A2DP Reconfig") - 1);
+		else if (ctl->show_battery)
 			label_max_len = MAX(label_max_len, sizeof(" | Battery") - 1);
 
 		/* Reserve space for the longest element type description. This applies
@@ -562,9 +590,8 @@ static void bluealsa_elem_set_name(struct bluealsa_ctl *ctl, struct ctl_elem *el
 		while (isspace(name[len - 1]))
 			len--;
 
-		if (elem->type == CTL_ELEM_TYPE_BATTERY) {
+		if (elem->type == CTL_ELEM_TYPE_BATTERY)
 			sprintf(elem->name, "%.*s%s | Battery", len, name, no);
-		}
 		else {
 			/* Avoid name duplication by adding profile suffixes. */
 			switch (elem->pcm->transport) {
@@ -617,11 +644,14 @@ static void bluealsa_elem_set_name(struct bluealsa_ctl *ctl, struct ctl_elem *el
 	if (elem->type == CTL_ELEM_TYPE_DELAY_SYNC)
 		strcat(elem->name, " Sync");
 
+	if (elem->type == CTL_ELEM_TYPE_RECONF)
+		strcat(elem->name, " Reconfig");
+
 	/* ALSA library determines the element type by checking it's
 	 * name suffix. This feature is not well documented, though.
-	 * A codec control is 'Global' (i.e. neither 'Playback' nor
-	 * 'Capture') so we omit the suffix in that case. */
-	if (elem->type != CTL_ELEM_TYPE_CODEC)
+	 * The codec and reconfigurable controls are 'Global' (i.e. neither
+	 * 'Playback' nor 'Capture') so we omit the suffix in that case. */
+	if (elem->type != CTL_ELEM_TYPE_CODEC && elem->type != CTL_ELEM_TYPE_RECONF)
 		strcat(elem->name, elem->playback ? " Playback" : " Capture");
 
 	switch (elem->type) {
@@ -635,6 +665,7 @@ static void bluealsa_elem_set_name(struct bluealsa_ctl *ctl, struct ctl_elem *el
 	case CTL_ELEM_TYPE_CODEC:
 	case CTL_ELEM_TYPE_VOLUME_MODE:
 	case CTL_ELEM_TYPE_DELAY_SYNC:
+	case CTL_ELEM_TYPE_RECONF:
 		strcat(elem->name, " Enum");
 		break;
 	}
@@ -654,10 +685,12 @@ static void bluealsa_elem_set_name(struct bluealsa_ctl *ctl, struct ctl_elem *el
  *   control element for codec selection will be created. The ownership of
  *   the codec list structure is transferred to associated control element.
  * @param add_battery_elem If true, add battery level indicator element.
+ * @param add_reconf_elem If true, add reconfigurability control element.
  * @return The number of elements added. */
 static size_t bluealsa_elem_list_add_pcm_elems(struct bluealsa_ctl *ctl,
 		struct ctl_elem *elem_list, struct bt_dev *dev, struct ba_pcm *pcm,
-		struct ba_pcm_codecs *codecs, bool add_battery_elem) {
+		struct ba_pcm_codecs *codecs, bool add_battery_elem,
+		bool add_reconf_elem) {
 
 	const char *name = ctl->single_device ? NULL : dev->name;
 	const bool playback = pcm->mode == BA_PCM_MODE_SINK;
@@ -751,6 +784,19 @@ static size_t bluealsa_elem_list_add_pcm_elems(struct bluealsa_ctl *ctl,
 		n++;
 	}
 
+	/* add special reconfigurability control element */
+	if (add_reconf_elem) {
+		elem_list[n].type = CTL_ELEM_TYPE_RECONF;
+		elem_list[n].dev = dev;
+		elem_list[n].pcm = pcm;
+		elem_list[n].playback = true;
+		elem_list[n].active = true;
+		bluealsa_elem_set_name(ctl, &elem_list[n], name, false);
+		elem_list[n].index = 0;
+
+		n++;
+	}
+
 	return n;
 }
 
@@ -786,6 +832,8 @@ static int bluealsa_create_elem_list(struct bluealsa_ctl *ctl) {
 				count += 1;
 			if (ctl->show_delay_sync)
 				count += 1;
+			if (ctl->show_reconf)
+				count += 1;
 		}
 
 		if ((elem_list = realloc(elem_list, count * sizeof(*elem_list))) == NULL)
@@ -807,14 +855,19 @@ static int bluealsa_create_elem_list(struct bluealsa_ctl *ctl) {
 		struct bt_dev *dev = bluealsa_dev_get(ctl, pcm);
 		struct ba_pcm_codecs codecs = { 0 };
 		bool add_battery_elem = false;
+		bool add_reconf_elem = false;
 
 		/* If Bluetooth transport is bi-directional it must have the same codec
 		 * for both sink and source. In case of such profiles we will only add
 		 * the codec control element for the main stream direction. */
-		if (ctl->show_codec && (
-					BA_PCM_A2DP_MAIN_CHANNEL(pcm) ||
-					BA_PCM_SCO_SPEAKER_CHANNEL(pcm)))
-			bluealsa_pcm_fetch_codecs(ctl, pcm, &codecs);
+		if (BA_PCM_A2DP_MAIN_CHANNEL(pcm) ||
+					BA_PCM_SCO_SPEAKER_CHANNEL(pcm))
+			if (ctl->show_codec)
+				bluealsa_pcm_fetch_codecs(ctl, pcm, &codecs);
+
+		if (BA_PCM_A2DP_MAIN_CHANNEL(pcm) && ctl->show_reconf)
+			add_reconf_elem = true;
+
 
 		if (ctl->show_battery &&
 				!elem_list_dev_has_battery_elem(elem_list, count, dev)) {
@@ -823,7 +876,7 @@ static int bluealsa_create_elem_list(struct bluealsa_ctl *ctl) {
 		}
 
 		count += bluealsa_elem_list_add_pcm_elems(ctl, &elem_list[count],
-				dev, pcm, &codecs, add_battery_elem);
+				dev, pcm, &codecs, add_battery_elem, add_reconf_elem);
 
 	}
 
@@ -974,6 +1027,11 @@ static int bluealsa_get_attribute(snd_ctl_ext_t *ext, snd_ctl_ext_key_t key,
 		*type = SND_CTL_ELEM_TYPE_INTEGER;
 		*count = pcm->channels;
 		break;
+	case CTL_ELEM_TYPE_RECONF:
+		*acc = SND_CTL_EXT_ACCESS_READWRITE;
+		*type = SND_CTL_ELEM_TYPE_ENUMERATED;
+		*count = 1;
+		break;
 	}
 
 	return 0;
@@ -1018,6 +1076,7 @@ static int bluealsa_get_integer_info(snd_ctl_ext_t *ext, snd_ctl_ext_key_t key,
 	case CTL_ELEM_TYPE_VOLUME_MODE:
 	case CTL_ELEM_TYPE_SWITCH:
 	case CTL_ELEM_TYPE_DELAY_SYNC:
+	case CTL_ELEM_TYPE_RECONF:
 		return -EINVAL;
 	}
 
@@ -1093,6 +1152,7 @@ static int bluealsa_read_integer(snd_ctl_ext_t *ext, snd_ctl_ext_key_t key, long
 	case CTL_ELEM_TYPE_CODEC:
 	case CTL_ELEM_TYPE_VOLUME_MODE:
 	case CTL_ELEM_TYPE_DELAY_SYNC:
+	case CTL_ELEM_TYPE_RECONF:
 		return -EINVAL;
 	}
 
@@ -1135,6 +1195,7 @@ static int bluealsa_write_integer(snd_ctl_ext_t *ext, snd_ctl_ext_key_t key, lon
 	case CTL_ELEM_TYPE_CODEC:
 	case CTL_ELEM_TYPE_VOLUME_MODE:
 	case CTL_ELEM_TYPE_DELAY_SYNC:
+	case CTL_ELEM_TYPE_RECONF:
 		return -EINVAL;
 	}
 
@@ -1165,6 +1226,9 @@ int bluealsa_get_enumerated_info(snd_ctl_ext_t *ext, snd_ctl_ext_key_t key, unsi
 		break;
 	case CTL_ELEM_TYPE_DELAY_SYNC:
 		*items = DELAY_SYNC_NUM_VALUES;
+		break;
+	case CTL_ELEM_TYPE_RECONF:
+		*items = ARRAYSIZE(reconf_names);
 		break;
 	case CTL_ELEM_TYPE_BATTERY:
 	case CTL_ELEM_TYPE_SWITCH:
@@ -1202,6 +1266,12 @@ int bluealsa_get_enumerated_name(snd_ctl_ext_t *ext, snd_ctl_ext_key_t key,
 			return -EINVAL;
 		const int16_t value = (item * DELAY_SYNC_STEP) + DELAY_SYNC_MIN_VALUE;
 		snprintf(name, name_max_len, "%+d ms", value / 10);
+		break;
+	case CTL_ELEM_TYPE_RECONF:
+		if (item >= ARRAYSIZE(reconf_names))
+			return -EINVAL;
+		strncpy(name, reconf_names[item], name_max_len - 1);
+		name[name_max_len - 1] = '\0';
 		break;
 	case CTL_ELEM_TYPE_BATTERY:
 	case CTL_ELEM_TYPE_SWITCH:
@@ -1253,6 +1323,9 @@ static int bluealsa_read_enumerated(snd_ctl_ext_t *ext, snd_ctl_ext_key_t key,
 		break;
 	case CTL_ELEM_TYPE_DELAY_SYNC:
 		items[0] = DIV_ROUND(pcm->client_delay - INT16_MIN, DELAY_SYNC_STEP);
+		break;
+	case CTL_ELEM_TYPE_RECONF:
+		items[0] = pcm->reconfigurable ? 1 : 0;
 		break;
 	case CTL_ELEM_TYPE_BATTERY:
 	case CTL_ELEM_TYPE_SWITCH:
@@ -1317,6 +1390,16 @@ static int bluealsa_write_enumerated(snd_ctl_ext_t *ext, snd_ctl_ext_key_t key,
 		if (!ba_dbus_pcm_update(&ctl->dbus_ctx, pcm, BLUEALSA_PCM_CLIENT_DELAY, NULL))
 			return -EIO;
 		process_events(&ctl->ext);
+		break;
+	case CTL_ELEM_TYPE_RECONF:
+		if (items[0] >= ARRAYSIZE(reconf_names))
+			return -EINVAL;
+		const bool reconf = items[0] == 1;
+		if (pcm->reconfigurable == reconf)
+			return 0;
+		pcm->reconfigurable = reconf;
+		if (!ba_dbus_pcm_update(&ctl->dbus_ctx, pcm, BLUEALSA_PCM_RECONFIGURABLE, NULL))
+			return -EIO;
 		break;
 	case CTL_ELEM_TYPE_BATTERY:
 	case CTL_ELEM_TYPE_SWITCH:
@@ -1773,6 +1856,7 @@ SND_CTL_PLUGIN_DEFINE_FUNC(bluealsa) {
 	bool show_codec = false;
 	bool show_vol_mode = false;
 	bool show_delay_sync = false;
+	bool show_reconf = false;
 	bool dynamic = true;
 	struct bluealsa_ctl *ctl;
 	int ret;
@@ -1810,7 +1894,7 @@ SND_CTL_PLUGIN_DEFINE_FUNC(bluealsa) {
 				return -EINVAL;
 			}
 			if (parse_extended(extended, &show_codec, &show_vol_mode,
-						&show_delay_sync, &show_battery) < 0) {
+						&show_delay_sync, &show_battery, &show_reconf) < 0) {
 				SNDERR("Invalid extended options: %s", extended);
 				return -EINVAL;
 			}
@@ -1876,6 +1960,7 @@ SND_CTL_PLUGIN_DEFINE_FUNC(bluealsa) {
 	ctl->show_vol_mode = show_vol_mode;
 	ctl->show_delay_sync = show_delay_sync;
 	ctl->show_battery = show_battery;
+	ctl->show_reconf = show_reconf;
 	ctl->show_bt_transport = show_bt_transport;
 	ctl->single_device = single_device_mode;
 	ctl->dynamic = dynamic;
