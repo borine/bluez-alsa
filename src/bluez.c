@@ -573,7 +573,9 @@ static void bluez_endpoint_set_configuration(GDBusMethodInvocation *inv, void *u
 	}
 
 	t->media.bluez_dbus_sep_path = dbus_obj->path;
-	t->media.delay_reporting = delay_reporting;
+	/* Always enable delay reporting in case of A2DP Sink, but for A2DP source
+	 * only enable it if supported by remote device */
+	t->media.delay_reporting = (t->profile == BA_TRANSPORT_PROFILE_A2DP_SINK) || delay_reporting;
 	t->media.delay = delay;
 	t->media.volume = volume;
 
