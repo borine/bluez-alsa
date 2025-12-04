@@ -761,6 +761,9 @@ static void bluez_adapter_export_a2dp(
 		struct bluez_dbus_object_data *dbus_obj;
 		GError *err = NULL;
 
+		if (config.a2dp.single_sep_per_codec && index == 1)
+			break;
+
 		const char *path = bluez_get_media_endpoint_object_path(adapter, sep, ++index);
 		if ((dbus_obj = g_hash_table_lookup(dbus_object_data_map, path)) == NULL) {
 
