@@ -160,6 +160,17 @@ OPTIONS
     With this option, **bluealsad** will request such a device uses only 44.1
     kHz sample rate.
 
+--a2dp-single-sep
+    Create only one SEP per A2DP codec for each stream direction.
+    By default two SEPs are initially created for each codec (in each
+    direction for duplex codecs), permitting two devices to connect
+    simultaneously using the same codec. An additional SEP is created at each
+    connection if necessary to maintain at least two unconnected SEPS. However
+    some devices fail when they are presented with more than one matching SEP.
+    With this option only one SEP is created for each codec, so that such
+    devices can be used, but it is no longer possible to have two or more
+    devices simultaneously connected using the same A2DP codec.
+
 --sbc-quality=MODE
     Set SBC encoder quality.
     Default value is **high**.
