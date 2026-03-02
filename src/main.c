@@ -116,15 +116,21 @@ static char *get_hfp_codecs(void) {
 	return g_strjoinv(", ", (char **)strv);
 }
 
-static int main_loop_exit_handler(void *userdata) {
+static int main_loop_quit_handler(void * userdata) {
 	g_main_loop_quit((GMainLoop *)userdata);
 	return G_SOURCE_REMOVE;
 }
 
-static void g_bus_name_acquired(GDBusConnection *conn, const char *name, void *userdata) {
-	(void)conn;
-	(void)name;
-	(void)userdata;
+static int main_loop_shutdown_handler(void * userdata) {
+	/* Cleanup internal structures while the main loop is still running. */
+	bluez_destroy();
+	/* Allow the main loop to finish pending events, then quit. */
+	g_idle_add(main_loop_quit_handler, userdata);
+	return G_SOURCE_REMOVE;
+}
+
+static void g_bus_name_acquired(G_GNUC_UNUSED GDBusConnection * conn,
+		G_GNUC_UNUSED const char * name, G_GNUC_UNUSED void * userdata) {
 
 	debug("Acquired D-Bus service name: %s", name);
 	dbus_name_acquired = true;
@@ -141,8 +147,8 @@ static void g_bus_name_acquired(GDBusConnection *conn, const char *name, void *u
 
 }
 
-static void g_bus_name_lost(GDBusConnection *conn, const char *name, void *userdata) {
-	(void)conn;
+static void g_bus_name_lost(G_GNUC_UNUSED GDBusConnection * conn,
+		const char * name, void * userdata) {
 
 	if (!dbus_name_acquired)
 		error(
@@ -151,7 +157,7 @@ static void g_bus_name_lost(GDBusConnection *conn, const char *name, void *userd
 	else
 		error("Lost BlueALSA D-Bus name: %s", name);
 
-	g_main_loop_quit((GMainLoop *)userdata);
+	main_loop_shutdown_handler(userdata);
 
 	dbus_name_acquired = false;
 	retval = EXIT_FAILURE;
@@ -766,14 +772,11 @@ int main(int argc, char **argv) {
 	}
 #endif
 
-	/* initialize random number generator */
+	/* Initialize random number generator. */
 	srandom(time(NULL));
 
-	char *address;
-	GError *err;
-
-	err = NULL;
-	address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
+	g_autoptr(GError) err = NULL;
+	g_autofree char * address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
 	if ((config.dbus = g_dbus_connection_new_for_address_simple_sync(address, &err)) == NULL) {
 		error("Couldn't obtain D-Bus connection: %s", err->message);
 		return EXIT_FAILURE;
@@ -814,26 +817,20 @@ int main(int argc, char **argv) {
 	struct sigaction sigact = { .sa_handler = SIG_IGN };
 	sigaction(SIGPIPE, &sigact, NULL);
 
-	GMainLoop *loop = g_main_loop_new(NULL, FALSE);
-	g_unix_signal_add(SIGINT, main_loop_exit_handler, loop);
-	g_unix_signal_add(SIGTERM, main_loop_exit_handler, loop);
+	g_autoptr(GMainLoop) loop = g_main_loop_new(NULL, FALSE);
+	g_unix_signal_add(SIGINT, main_loop_shutdown_handler, loop);
+	g_unix_signal_add(SIGTERM, main_loop_shutdown_handler, loop);
 
-	/* register well-known service name */
+	/* Register well-known service name. */
 	g_bus_own_name_on_connection(config.dbus,
 			dbus_service, G_BUS_NAME_OWNER_FLAGS_DO_NOT_QUEUE,
 			g_bus_name_acquired, g_bus_name_lost, loop, NULL);
 
-	/* main dispatching loop */
+	/* Run main dispatching loop. */
 	debug("Starting main dispatching loop");
 	g_main_loop_run(loop);
 
-	/* cleanup internal structures */
-	bluez_destroy();
-
 	storage_destroy();
 	g_dbus_connection_close_sync(config.dbus, NULL, NULL);
-	g_main_loop_unref(loop);
-	g_free(address);
-
 	return retval;
 }
