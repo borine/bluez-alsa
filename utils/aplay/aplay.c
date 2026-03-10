@@ -643,7 +643,7 @@ static void *io_worker_routine(struct io_worker *w) {
 			if (nfds <= ARRAYSIZE(fds))
 				alsa_mixer_poll_descriptors(&w->alsa_mixer, fds + 2, nfds - 2);
 			else {
-				error("Poll FD array size exceeded: %zu > %zu", nfds, ARRAYSIZE(fds));
+				error("Poll FD array size exceeded: %zu > %zu", (size_t)nfds, ARRAYSIZE(fds));
 				goto fail;
 			}
 		}
