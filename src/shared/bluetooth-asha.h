@@ -38,7 +38,7 @@ typedef struct asha_hi_sync_id {
 	uint16_t vendor_id;
 	uint8_t unique_id[6];
 #define ASHA_HI_SYNC_ID_INIT(v, ...) { HTOLE16(v), { __VA_ARGS__ } }
-#define ASHA_HI_SYNC_ID_GET_VENDOR_ID(a) le32toh((a).vendor_id)
+#define ASHA_HI_SYNC_ID_GET_VENDOR_ID(a) le16toh((a).vendor_id)
 #define ASHA_HI_SYNC_ID_GET_UNIQUE_ID(a) (a).unique_id
 } __attribute__ ((packed)) asha_hi_sync_id_t;
 
