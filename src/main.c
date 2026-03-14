@@ -185,6 +185,7 @@ int main(int argc, char **argv) {
 		{ "disable-realtek-usb-fix", no_argument, NULL, 21 },
 		{ "a2dp-force-mono", no_argument, NULL, 6 },
 		{ "a2dp-force-audio-cd", no_argument, NULL, 7 },
+		{ "a2dp-single-sep", no_argument, NULL, 24 },
 		{ "sbc-quality", required_argument, NULL, 14 },
 #if ENABLE_AAC
 		{ "aac-afterburner", no_argument, NULL, 4 },
@@ -341,6 +342,7 @@ int main(int argc, char **argv) {
 					"\nA2DP options:\n"
 					"      --a2dp-force-mono\t\ttry to force monophonic audio for A2DP profiles\n"
 					"      --a2dp-force-audio-cd\ttry to force 44.1 kHz sampling for A2DP profiles\n"
+					"      --a2dp-single-sep\t\tcreate only one SEP per codec\n"
 					"      --sbc-quality=MODE\tset SBC encoder quality; default: %s\n"
 #if ENABLE_AAC
 					"      --aac-afterburner\t\tenable FDK AAC afterburner\n"
@@ -653,6 +655,9 @@ int main(int argc, char **argv) {
 			break;
 		case 7 /* --a2dp-force-audio-cd */ :
 			config.a2dp.force_44100 = true;
+			break;
+		case 24 /* --a2dp-single-sep */ :
+			config.a2dp.single_sep_per_codec = true;
 			break;
 
 		case 14 /* --sbc-quality=MODE */ : {

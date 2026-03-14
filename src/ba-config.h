@@ -128,6 +128,13 @@ struct ba_config {
 		 * to force lower sampling in order to save Bluetooth bandwidth. */
 		bool force_44100;
 
+		/* Export only one SEP per codec. Some devices have firmware that
+		 * assumes only one SEP per codec, and such devices fail to create
+		 * A2DP profile connections when that assumption is false. The
+		 * downside to this is that it is not then possible to have two
+		 * connected devices simultaneously using the same codec. */
+		bool single_sep_per_codec;
+
 	} a2dp;
 
 #if ENABLE_ASHA
