@@ -159,14 +159,14 @@ CK_START_TEST(test_controls_extended) {
 	snd_ctl_elem_list_alloca(&elems);
 
 	ck_assert_int_eq(snd_ctl_elem_list(ctl, elems), 0);
-	ck_assert_int_eq(snd_ctl_elem_list_get_count(elems), 20);
-	ck_assert_int_eq(snd_ctl_elem_list_alloc_space(elems, 20), 0);
+	ck_assert_int_eq(snd_ctl_elem_list_get_count(elems), 22);
+	ck_assert_int_eq(snd_ctl_elem_list_alloc_space(elems, 22), 0);
 	ck_assert_int_eq(snd_ctl_elem_list(ctl, elems), 0);
 
 	/* codec control element shall be after playback/capture elements */
 	ck_assert_str_eq(snd_ctl_elem_list_get_name(elems, 3), "12:34:56:78:9A:BC A2DP Codec Enum");
-	ck_assert_str_eq(snd_ctl_elem_list_get_name(elems, 11), "12:34:56:78:9A:BC SCO Codec Enum");
-	ck_assert_str_eq(snd_ctl_elem_list_get_name(elems, 18), "23:45:67:89:AB:CD A2DP Codec Enum");
+	ck_assert_str_eq(snd_ctl_elem_list_get_name(elems, 12), "12:34:56:78:9A:BC SCO Codec Enum");
+	ck_assert_str_eq(snd_ctl_elem_list_get_name(elems, 19), "23:45:67:89:AB:CD A2DP Codec Enum");
 
 	int sco_codec_enum_items = 1;
 #if ENABLE_MSBC
@@ -180,7 +180,7 @@ CK_START_TEST(test_controls_extended) {
 	snd_ctl_elem_info_alloca(&info);
 
 	/* 12:34:56:78:9A:BC SCO Codec Enum */
-	snd_ctl_elem_info_set_numid(info, snd_ctl_elem_list_get_numid(elems, 11));
+	snd_ctl_elem_info_set_numid(info, snd_ctl_elem_list_get_numid(elems, 12));
 	ck_assert_int_eq(snd_ctl_elem_info(ctl, info), 0);
 	ck_assert_int_eq(snd_ctl_elem_info_get_items(info), sco_codec_enum_items);
 	snd_ctl_elem_info_set_item(info, 0);
@@ -205,8 +205,17 @@ CK_START_TEST(test_controls_extended) {
 	/* write reports 0 because we are setting currently selected codec */
 	ck_assert_int_eq(snd_ctl_elem_write(ctl, elem), 0);
 
+	/* 12:34:56:78:9A:BC A2DP Reconfig Enum */
+	snd_ctl_elem_value_set_numid(elem, snd_ctl_elem_list_get_numid(elems, 5));
+	/* get currently selected reconfigurability */
+	ck_assert_int_eq(snd_ctl_elem_read(ctl, elem), 0);
+	ck_assert_int_eq(snd_ctl_elem_value_get_enumerated(elem, 0), 1);
+	/* select reconfigurable off */
+	snd_ctl_elem_value_set_enumerated(elem, 0, 0);
+	ck_assert_int_eq(snd_ctl_elem_write(ctl, elem), 1);
+
 	/* 12:34:56:78:9A:BC SCO Codec Enum */
-	snd_ctl_elem_value_set_numid(elem, snd_ctl_elem_list_get_numid(elems, 11));
+	snd_ctl_elem_value_set_numid(elem, snd_ctl_elem_list_get_numid(elems, 12));
 	/* get currently selected SCO codec */
 	ck_assert_int_eq(snd_ctl_elem_read(ctl, elem), 0);
 	ck_assert_int_eq(snd_ctl_elem_value_get_enumerated(elem, 0),

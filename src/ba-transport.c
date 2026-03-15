@@ -442,6 +442,7 @@ struct ba_transport *ba_transport_new_a2dp(
 
 	t->media.a2dp.sep = sep;
 	memcpy(&t->media.a2dp.configuration, configuration, sep->config.caps_size);
+	t->media.a2dp.reconfigurable = true;
 
 	t->acquire = transport_acquire_bt_media;
 	t->release = transport_release_bt_media;
@@ -999,9 +1000,14 @@ int ba_transport_select_codec_a2dp(
 #endif
 
 	/* the same codec with the same configuration already selected */
-	if (remote_sep_cfg->codec_id == t->codec_id &&
-			memcmp(configuration, &t->media.a2dp.configuration, remote_sep_cfg->caps_size) == 0)
-		goto final;
+	if (remote_sep_cfg->codec_id == t->codec_id) {
+		if (memcmp(configuration, &t->media.a2dp.configuration, remote_sep_cfg->caps_size) != 0) {
+			if (!t->media.a2dp.reconfigurable)
+				return errno = ENOSYS, -1;
+		}
+		else
+			return 0;
+	}
 
 	/* A2DP codec selection is in fact a transport recreation - new transport
 	 * with new codec is created and the current one is released. Since normally
@@ -1019,7 +1025,6 @@ int ba_transport_select_codec_a2dp(
 		return errno = EIO, -1;
 	}
 
-final:
 	return 0;
 }
 
@@ -1125,6 +1130,22 @@ void ba_transport_set_codec(
 	else if (BA_TRANSPORT_PROFILE_IS_SCO(t))
 		sco_transport_init(t);
 
+}
+
+/**
+ * Flag A2DP transport reconfigurability */
+void ba_transport_a2dp_set_reconfigurable(struct ba_transport *t, bool reconfigurable) {
+
+	g_assert(BA_TRANSPORT_PROFILE_IS_MEDIA_A2DP(t));
+
+	pthread_mutex_lock(&t->codec_select_client_mtx);
+
+	if (t->media.a2dp.reconfigurable != reconfigurable) {
+		debug("Setting reconfigurable flag: %s %s", ba_transport_debug_name(t), reconfigurable ? "true" : "false");
+		t->media.a2dp.reconfigurable = reconfigurable;
+	}
+
+	pthread_mutex_unlock(&t->codec_select_client_mtx);
 }
 
 /**
