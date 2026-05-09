@@ -67,6 +67,9 @@ void *dlopen(const char *filename, int flags) {
 	if (strstr(filename, "libasound_module_pcm_bluealsa.so") != NULL)
 		filename = strcat(tmp, "/src/asound/.libs/libasound_module_pcm_bluealsa.so");
 
+	if (dlopen_orig == NULL)
+		dlopen_orig = dlsym(RTLD_NEXT, "dlopen");
+
 	return dlopen_orig(filename, flags);
 }
 
