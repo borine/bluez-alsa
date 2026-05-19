@@ -1576,7 +1576,7 @@ static int str2codec(const char *codec, char *name, size_t name_size,
 
 	size_t name_len = strlen(codec);
 
-	char *delim;
+	const char * delim;
 	/* Check for the delimiter which separates codec name and configuration. */
 	if ((delim = strchr(codec, ':')) != NULL) {
 
