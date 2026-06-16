@@ -19,6 +19,7 @@
 #include <bluetooth/hci.h>
 #include <bluetooth/hci_lib.h>
 
+#include "hci-usb.h"
 #include "shared/rc.h"
 
 /* Data associated with BT adapter. */
@@ -39,6 +40,9 @@ struct ba_adapter {
 	/* Collection of connected devices. */
 	pthread_mutex_t devices_mutex;
 	GHashTable * devices;
+
+	/* for USB adapters only. */
+	struct hci_usb_sco *hci_usb;
 
 };
 
