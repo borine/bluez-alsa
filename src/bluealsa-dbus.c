@@ -486,9 +486,6 @@ static int bluealsa_pcm_controller(
 		ba_transport_pcm_release(pcm);
 		pthread_mutex_unlock(&pcm->mutex);
 		ba_transport_pcm_signal_send(pcm, BA_TRANSPORT_PCM_SIGNAL_CLOSE);
-		/* Check whether we've just closed the last PCM client and in
-		 * such a case schedule transport IO threads termination. */
-		ba_transport_stop_if_no_clients(pcm->t);
 		/* Remove channel from watch. */
 		return G_SOURCE_REMOVE;
 	}
