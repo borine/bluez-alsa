@@ -1910,38 +1910,37 @@ static int bluealsa_set_hw_constraint(struct bluealsa_pcm *pcm) {
 					min_p, 1024 * 1024)) < 0)
 		return err;
 
+	unsigned int chanlist[ARRAYSIZE(codec->channels)];
+	unsigned int ratelist[ARRAYSIZE(codec->rates)];
+
 	/* If the PCM is already running, we must not change the codec config as
-	* that would terminate the stream for the running client */
-	if (pcm->ba_pcm.running) {
-		if ((err = snd_pcm_ioplug_set_param_minmax(io,
-					SND_PCM_IOPLUG_HW_CHANNELS, pcm->ba_pcm.channels,
-					pcm->ba_pcm.channels)) < 0)
+	 * that would terminate the stream for the running client */
+	if (pcm->ba_pcm.reconfigurable && !pcm->ba_pcm.running) {
+		/* Populate the list of supported channels and sample rates. For codecs
+		 * with fixed configuration, the list will contain only one element.
+		 * For other codecs, the list might contain all supported
+		 * configurations. */
+
+		unsigned int n = 0;
+		for (size_t i = 0; i < ARRAYSIZE(codec->channels) && codec->channels[i] != 0; i++)
+			chanlist[n++] = codec->channels[i];
+		if ((err = snd_pcm_ioplug_set_param_list(io, SND_PCM_IOPLUG_HW_CHANNELS, n, chanlist)) < 0)
 			return err;
 
-		if ((err = snd_pcm_ioplug_set_param_minmax(io, SND_PCM_IOPLUG_HW_RATE,
-					pcm->ba_pcm.rate, pcm->ba_pcm.rate)) < 0)
+		n = 0;
+		for (size_t i = 0; i < ARRAYSIZE(codec->rates) && codec->rates[i] != 0; i++)
+			ratelist[n++] = codec->rates[i];
+		if ((err = snd_pcm_ioplug_set_param_list(io, SND_PCM_IOPLUG_HW_RATE, n, ratelist)) < 0)
 			return err;
-
-		return 0;
 	}
-
-	/* Populate the list of supported channels and sample rates. For codecs
-	 * with fixed configuration, the list will contain only one element. For
-	 * other codecs, the list might contain all supported configurations. */
-
-	unsigned int list[ARRAYSIZE(codec->rates)];
-	unsigned int n = 0;
-
-	for (size_t i = 0; i < ARRAYSIZE(codec->channels) && codec->channels[i] != 0; i++)
-		list[n++] = codec->channels[i];
-	if ((err = snd_pcm_ioplug_set_param_list(io, SND_PCM_IOPLUG_HW_CHANNELS, n, list)) < 0)
-		return err;
-
-	n = 0;
-	for (size_t i = 0; i < ARRAYSIZE(codec->rates) && codec->rates[i] != 0; i++)
-		list[n++] = codec->rates[i];
-	if ((err = snd_pcm_ioplug_set_param_list(io, SND_PCM_IOPLUG_HW_RATE, n, list)) < 0)
-		return err;
+	else {
+		chanlist[0] = pcm->ba_pcm.channels;
+		if ((err = snd_pcm_ioplug_set_param_list(io, SND_PCM_IOPLUG_HW_CHANNELS, 1, chanlist)) < 0)
+			return err;
+		ratelist[0] = pcm->ba_pcm.rate;
+		if ((err = snd_pcm_ioplug_set_param_list(io, SND_PCM_IOPLUG_HW_RATE, 1, ratelist)) < 0)
+			return err;
+	}
 
 	return 0;
 }
