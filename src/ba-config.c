@@ -78,6 +78,7 @@ struct ba_config config = {
 
 	.a2dp.force_mono = false,
 	.a2dp.force_44100 = false,
+	.a2dp.single_sep_per_codec = false,
 
 #if ENABLE_ASHA
 	.asha.id = ASHA_HI_SYNC_ID_INIT(
