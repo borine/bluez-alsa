@@ -9,7 +9,7 @@ bluealsa-plugins
 Bluetooth Audio ALSA Plugins
 ----------------------------
 
-:Date: December 2025
+:Date: July 2026
 :Manual section: 7
 :Manual group: Miscellaneous
 :Version: $VERSION$
@@ -651,6 +651,65 @@ mode the plugin will inform the application of drain completion as soon as the
 ALSA ring buffer has been flushed; this means that some audio frames at the end
 of the stream may be lost in non-blocking mode as the PCM may stop before the
 server has had time to encode and play out all the frames.
+
+ENVIRONMENT
+===========
+
+alsa-lib 1.2.15 and later
+-------------------------
+
+When built with alsa-lib version 1.2.15 or later, the BlueALSA plugins use the
+alsa-lib logging API for for all error and debug message logging. All messages
+are written to the log handler set by the application. The default log handler
+writes messages to stderr. The following environment variable is used by that
+API to control the messaging:
+
+LIBASOUND_DEBUG=LEVEL
+    Set the priority level threshold for log messages. Only messages of
+    the given level or higher are logged. The level may be specified by name
+    or number.
+
+    The *LEVELs* are, in decreasing priority level order:
+
+    - **error**   (1) - error conditions
+    - **warning** (2) - warning conditions
+    - **info**    (3) - informational messages
+    - **debug**   (4) - debug messages
+    - **trace**   (5) - trace messages
+
+    The BlueALSA plugins do not contain any **trace** messages; **debug**
+    messages are only included if the plugins were built with debug enabled.
+
+    If this environment variable is not set, or has some other value not
+    listed above, then the default is to log only error messages.
+
+alsa-lib 1.2.14 and earlier
+---------------------------
+
+Earlier versions of alsa-lib do not support filtering of messages. When the
+BlueALSA plugins are built with alsa-lib version 1.2.14 or earlier only error
+messages use the alsa-lib API; warning messages and debug messages, when
+available, are written directly to stderr. With these versions of alsa-lib we
+can use the following environment variable to control the BlueALSA messaging:
+
+BLUEALSA_LOG_LEVEL=LEVEL
+    Set the priority level threshold for log messages. Only messages of the
+    given level or higher are logged. The *LEVELs* are, in decreasing order:
+
+    - **error**   - error conditions
+
+    - **warning** - warning conditions
+
+    - **info**    - informational messages
+
+    If the plugin was  built with debug enabled, then an additional, lowest,
+    level is  available:
+
+    - **debug**    - debug messages
+
+    If this environment variable is not set, or has some other value not
+    listed above, then the default is to use the lowest level (i.e., all
+    messages are logged).
 
 FILES
 =====

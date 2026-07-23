@@ -35,8 +35,11 @@
 #include "shared/dbus-client-pcm.h"
 #include "shared/defs.h"
 #include "shared/hex.h"
-#include "shared/log.h"
 #include "shared/rt.h"
+
+#if SND_LIB_VERSION < 0x01020F
+#include "shared/log.h"
+#endif
 
 #define BA_PAUSE_STATE_RUNNING 0
 #define BA_PAUSE_STATE_PAUSED  (1 << 0)
@@ -138,10 +141,28 @@ struct bluealsa_pcm {
 
 };
 
+#if SND_LIB_VERSION >= 0x01020F
+#define debug( args... ) snd_lib_log(SND_LOG_DEBUG, SND_ILOG_PCM, \
+			__FILE__, __LINE__, __func__, 0, ##args)
+#define debug2(M, args... ) snd_lib_log(SND_LOG_DEBUG, \
+			SND_ILOG_PCM, __FILE__, __LINE__, __func__, 0, "%s: " M, \
+			pcm->ba_pcm.pcm_path, ##args)
+#define debug2_params(M, args... ) snd_lib_log(SND_LOG_DEBUG, \
+			SND_ILOG_PCM_PARAMS, __FILE__, __LINE__, __func__, 0, "%s: " M, \
+			pcm->ba_pcm.pcm_path, ##args)
+#define info( args... ) snd_lib_log(SND_LOG_INFO, \
+			SND_ILOG_PCM, __FILE__, __LINE__, __func__, 0, ##args)
+#define warn( args... ) snd_lib_log(SND_LOG_WARN, \
+			SND_ILOG_PCM, __FILE__, __LINE__, __func__, 0, ##args)
+#define error( args... ) snd_lib_log(SND_LOG_ERROR, \
+			SND_ILOG_PCM, __FILE__, __LINE__, __func__, 0, ##args)
+#else
 /**
  * Helper debug macro for internal usage. */
 #define debug2(M, ...) \
 	debug("%s: " M, pcm->ba_pcm.pcm_path, ## __VA_ARGS__)
+#define debug2_params debug2
+#endif
 
 #if SND_LIB_VERSION < 0x010106
 /**
@@ -925,7 +946,7 @@ static int bluealsa_hw_params(snd_pcm_ioplug_t *io, snd_pcm_hw_params_t *params)
 			int max_capacity = 1048576; /* Linux default max pipe size */
 			if ((f = fopen("/proc/sys/fs/pipe-max-size", "r")) != NULL) {
 				if (fscanf(f, "%d", &max_capacity) != 1)
-					debug("Unable to read pipe max size: %s", strerror(errno));
+					debug2("Unable to read pipe max size: %s", strerror(errno));
 				fclose(f);
 			}
 
@@ -1793,6 +1814,18 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 	long delay = 0;
 	struct bluealsa_pcm *pcm;
 	int ret;
+
+#if SND_LIB_VERSION < 0x01020F
+	const char *env_log_level = getenv("BLUEALSA_LOG_LEVEL");
+	if (env_log_level && *env_log_level) {
+		if (strcmp(env_log_level, "error") == 0)
+			log_level = LOG_ERR;
+		else if (strcmp(env_log_level, "warning") == 0)
+			log_level = LOG_WARNING;
+		else if (strcmp(env_log_level, "debug") == 0)
+			log_level = LOG_DEBUG;
+	}
+#endif
 
 	snd_config_iterator_t pos, next;
 	snd_config_for_each(pos, next, conf) {
