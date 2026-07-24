@@ -659,8 +659,8 @@ alsa-lib 1.2.15 and later
 -------------------------
 
 When built with alsa-lib version 1.2.15 or later, the BlueALSA plugins use the
-alsa-lib logging API for for all error and debug message logging. All messages
-are written to the log handler set by the application. The default log handler
+alsa-lib logging API for all error and debug message logging. All messages are
+written to the log handler set by the application. The default log handler
 writes messages to stderr. The following environment variable is used by that
 API to control the messaging:
 

@@ -26,6 +26,7 @@
 #include <bluetooth/bluetooth.h>
 #include <dbus/dbus.h>
 
+#include "asound/logging.h"
 #include "shared/dbus-client.h"
 #include "shared/dbus-client-pcm.h"
 #include "shared/defs.h"
@@ -1776,6 +1777,8 @@ SND_CTL_PLUGIN_DEFINE_FUNC(bluealsa) {
 	bool dynamic = true;
 	struct bluealsa_ctl *ctl;
 	int ret;
+
+	logging_init();
 
 	snd_config_iterator_t pos, next;
 	snd_config_for_each(pos, next, conf) {
