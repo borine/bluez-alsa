@@ -660,14 +660,14 @@ alsa-lib 1.2.15 and later
 
 When built with alsa-lib version 1.2.15 or later, the BlueALSA plugins use the
 alsa-lib logging API for all error and debug message logging. All messages are
-written to the log handler set by the application. The default log handler
+sent to the log handler set by the application. The default log handler
 writes messages to stderr. The following environment variable is used by that
 API to control the messaging:
 
 LIBASOUND_DEBUG=LEVEL
     Set the priority level threshold for log messages. Only messages of
-    the given level or higher are logged. The level may be specified by name
-    or number.
+    the given *LEVEL* or higher are logged. The *LEVEL* may be specified by
+    name or number.
 
     The *LEVELs* are, in decreasing priority level order:
 
@@ -687,9 +687,9 @@ alsa-lib 1.2.14 and earlier
 ---------------------------
 
 Earlier versions of alsa-lib do not support filtering of messages. When the
-BlueALSA plugins are built with alsa-lib version 1.2.14 or earlier only error
-messages use the alsa-lib API; warning messages and debug messages, when
-available, are written directly to stderr. With these versions of alsa-lib we
+BlueALSA plugins are built with alsa-lib version 1.2.14 or earlier the
+alsa-lib API is not used; instead the plugins use BlueALSA's own logging and
+all messages are written directly to stderr. With these versions of alsa-lib we
 can use the following environment variable to control the BlueALSA messaging:
 
 BLUEALSA_LOG_LEVEL=LEVEL
@@ -697,9 +697,7 @@ BLUEALSA_LOG_LEVEL=LEVEL
     given level or higher are logged. The *LEVELs* are, in decreasing order:
 
     - **error**   - error conditions
-
     - **warning** - warning conditions
-
     - **info**    - informational messages
 
     If the plugin was  built with debug enabled, then an additional, lowest,
