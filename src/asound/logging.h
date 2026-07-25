@@ -13,64 +13,55 @@
 # include <config.h>
 #endif
 
-#include <alsa/version.h>
+#include <alsa/asoundlib.h>
+
+#include <string.h>
+
 
 #if SND_LIB_VERSION >= 0x01020F
 
-# include <alsa/error.h>
-
-# if DEBUG
-#  define debug(M, ... ) snd_lib_log(SND_LOG_DEBUG, SND_ILOG_PCM, \
-			__FILE__, __LINE__, __func__, 0, M, ##__VA_ARGS__)
-#  define debug2(M, ... ) snd_lib_log(SND_LOG_DEBUG, SND_ILOG_PCM, \
-			__FILE__, __LINE__, __func__, 0, "%s: " M, pcm->ba_pcm.pcm_path, \
-			##__VA_ARGS__)
-#  define debug2_params(M, ... ) snd_lib_log(SND_LOG_DEBUG, \
-			SND_ILOG_PCM_PARAMS, __FILE__, __LINE__, __func__, 0, "%s: " M, \
-			pcm->ba_pcm.pcm_path, ##__VA_ARGS__)
-# else
-#  define debug(M, ...) do {} while (0)
-#  define debug2(M, ...) do {} while (0)
-#  define debug2_params(M, ...) do {} while (0)
+# if ! DEBUG
+#  ifdef snd_debug
+#  undef snd_debug
+#  endif
+#  define snd_debug(...) do {} while (0)
 # endif
 
-# define info( ... ) snd_lib_log(SND_LOG_INFO, \
-			SND_ILOG_PCM, __FILE__, __LINE__, __func__, 0, ##__VA_ARGS__)
-# define warn( ... ) snd_lib_log(SND_LOG_WARN, \
-			SND_ILOG_PCM, __FILE__, __LINE__, __func__, 0, ##__VA_ARGS__)
-# define error( ... ) snd_lib_log(SND_LOG_ERROR, \
-			SND_ILOG_PCM, __FILE__, __LINE__, __func__, 0, ##__VA_ARGS__)
-
-# define logging_init() do {} while (0)
+# define logging_init() do {} while (0);
 
 #else /* SND_LIB_VERSION < 0x01020F */
 
-# include "shared/log.h"
+# define BA_LOG_ERR   4
+# define BA_LOG_WARN  3
+# define BA_LOG_INFO  2
+# define BA_LOG_DEBUG 1
 
-# ifdef SNDERR
-# undef SNDERR
+
+/* Earlier releases of alsa-lib had no notion of message priority, all messages
+ * are error messages. So we insert an additional label to indicate priority */
+#define snd_error(interface, ...) snd_lib_error(__FILE__, __LINE__, __func__, 0, "[error] " __VA_ARGS__)
+#define snd_errornum(interface, ...) snd_lib_error(__FILE__, __LINE__, __func__, errno, "[error] " __VA_ARGS__)
+#define snd_warn(interface, ...) do { \
+		if (ba_snd_log_level <= BA_LOG_WARN) \
+			snd_lib_error(__FILE__, __LINE__, __func__, 0, "[warning] " __VA_ARGS__); \
+	} while (0)
+#define snd_info(interface, ...) do { \
+		if (ba_snd_log_level <= BA_LOG_INFO) \
+			snd_lib_error(__FILE__, __LINE__, __func__, 0, "[info] " __VA_ARGS__); \
+	} while (0)
+
+#if DEBUG
+# define snd_debug(interface, ...) do { \
+		if (ba_snd_log_level <= BA_LOG_DEBUG) \
+			snd_lib_error(__FILE__, __LINE__, __func__, 0, "[debug] " __VA_ARGS__); \
+	} while (0)
+#else
+# define snd_debug(...) do {} while (0)
 # endif
-# define SNDERR(M, ...) \
-		error(M, ## __VA_ARGS__)
 
-# define debug2(M, ...) \
-		debug("%s: " M, pcm->ba_pcm.pcm_path, ## __VA_ARGS__)
-# define debug2_params debug2
+extern int ba_snd_log_level;
 
-static inline void logging_init(void) {
-	const char *env_log_level = getenv("BLUEALSA_LOG_LEVEL");
-	if (env_log_level && *env_log_level) {
-		if (strcmp(env_log_level, "error") == 0)
-			log_level = LOG_ERR;
-		else if (strcmp(env_log_level, "warning") == 0)
-			log_level = LOG_WARNING;
-		else if (strcmp(env_log_level, "info") == 0)
-			log_level = LOG_INFO;
-		else if (strcmp(env_log_level, "debug") == 0)
-			log_level = LOG_DEBUG;
-	}
-}
+void logging_init(void);
 
 #endif
-
 
