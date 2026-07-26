@@ -396,14 +396,14 @@ CK_START_TEST(test_capture_poll) {
 
 	ck_assert_int_eq(snd_pcm_prepare(pcm), 0);
 	/* For a capture PCM just after prepare, the poll() call shall block
-	 * forever or at least the dispatched event shall be POLLHUP. */
+	 * forever or at least the dispatched event shall be set to 0. */
 	for (;;) {
 		ck_assert_int_ne(rv = poll(pfds, count, 750), -1);
 		/* make sure that at some point poll() will actually block */
 		if (rv == 0)
 			break;
 		snd_pcm_poll_descriptors_revents(pcm, pfds, count, &revents);
-		ck_assert_msg(revents == 0 || revents & POLLHUP, "Unexpected poll revents %d\n", revents);
+		ck_assert_int_eq(revents, 0);
 	}
 
 	ck_assert_int_eq(snd_pcm_start(pcm), 0);
