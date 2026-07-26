@@ -9,26 +9,26 @@
 #if SND_LIB_VERSION < 0x01020F
 
 #include <pthread.h>
-
+#include <stdlib.h>
 
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-int ba_snd_log_level = -1;
+int logging_private = -1;
 
 void logging_init(void) {
 	pthread_mutex_lock(&mutex);
-	if (ba_snd_log_level != -1)
+	if (logging_private != -1)
 		goto finish;
 
 	const char *env_log_level = getenv("BLUEALSA_LOG_LEVEL");
 	if (env_log_level && *env_log_level) {
 		if (strcmp(env_log_level, "error") == 0)
-			ba_snd_log_level = BA_LOG_ERR;
+			logging_private = BA_LOG_ERR;
 		else if (strcmp(env_log_level, "warning") == 0)
-			ba_snd_log_level = BA_LOG_WARN;
+			logging_private = BA_LOG_WARN;
 		else if (strcmp(env_log_level, "info") == 0)
-			ba_snd_log_level = BA_LOG_INFO;
+			logging_private = BA_LOG_INFO;
 		else
-			ba_snd_log_level = BA_LOG_DEBUG;
+			logging_private = BA_LOG_DEBUG;
 	}
 finish:
 	pthread_mutex_unlock(&mutex);

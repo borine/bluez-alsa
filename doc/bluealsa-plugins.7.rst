@@ -688,7 +688,7 @@ alsa-lib 1.2.14 and earlier
 
 Earlier versions of alsa-lib do not support filtering of messages. When the
 BlueALSA plugins are built with alsa-lib version 1.2.14 or earlier the
-plugins use their own message filering logic before passing them to the
+plugins use their own message filtering logic before passing them to the
 alsa-lib API. With these versions of alsa-lib we can use the following
 environment variable to filter the BlueALSA messaging:
 

@@ -916,7 +916,7 @@ static int bluealsa_hw_params(snd_pcm_ioplug_t *io, snd_pcm_hw_params_t *params)
 		 * will be rounded up to the page size (typically 4096 bytes). */
 		if ((ret = fcntl(pcm->ba_pcm_fd, F_SETPIPE_SZ, 2048)) == -1) {
 			snd_errornum(PCM, "Unable to set pipe size");
-			return ret;
+			return -errno;
 		}
 	}
 	else {
@@ -942,7 +942,7 @@ static int bluealsa_hw_params(snd_pcm_ioplug_t *io, snd_pcm_hw_params_t *params)
 
 		if ((ret = fcntl(pcm->ba_pcm_fd, F_GETPIPE_SZ)) == -1) {
 			snd_errornum(PCM, "Unable to read pipe size");
-			return ret;
+			return -errno;
 		}
 
 	}
@@ -1861,7 +1861,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 		}
 		if (strcmp(id, "delay") == 0) {
 			if (snd_config_get_integer(n, &delay) < 0) {
-				snd_error(CONFIG,"Invalid type for %s", id);
+				snd_error(CONFIG, "Invalid type for %s", id);
 				return -EINVAL;
 			}
 			continue;
