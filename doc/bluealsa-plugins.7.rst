@@ -662,7 +662,7 @@ When built with alsa-lib version 1.2.15 or later, the BlueALSA plugins use the
 alsa-lib logging API for all error and debug message logging. All messages are
 sent to the log handler set by the application. The default log handler
 writes messages to stderr. The following environment variable is used by that
-API to control the messaging:
+API to filter the messaging:
 
 LIBASOUND_DEBUG=LEVEL
     Set the priority level threshold for log messages. Only messages of
@@ -682,6 +682,25 @@ LIBASOUND_DEBUG=LEVEL
 
     If this environment variable is not set, or has some other value not
     listed above, then the default is to log only error messages.
+
+    The log messages have the following syntax: ::
+
+      ALSA lib <file>:<line>:(<function>) [<priority>.<interface>] <error description>
+
+    where, for BlueALSA messages:
+
+    <priority> is one of **error**, **warning**, **info**, or **debug**.
+
+    <interface> is one of **config**, **control**, or **pcm**.
+
+    For example: ::
+
+      ALSA lib ../../../../src/asound/bluealsa-pcm.c:1882:(_snd_pcm_bluealsa_open) [error.config] Invalid BT device address: 0
+
+    For BlueALSA debug messages the <error description> begins with the D-Bus
+    object path of the corresponding PCM or CTL, for example: ::
+
+      ALSA lib ../../../../src/asound/bluealsa-pcm.c:829:(bluealsa_hw_params) [debug.pcm] /org/bluealsa/hci0/dev_XX_XX_XX_XX_XX_XX/a2dpsrc/sink: Initializing HW
 
 alsa-lib 1.2.14 and earlier
 ---------------------------
@@ -703,11 +722,22 @@ BLUEALSA_LOG_LEVEL=LEVEL
     If the plugin was  built with debug enabled, then an additional, lowest,
     level is  available:
 
-    - **debug**    - debug messages
+    - **debug**   - debug messages
 
     If this environment variable is not set, or has some other value not
-    listed above, then the default is to use the lowest level (i.e., all
-    messages are logged).
+    listed above, then the default is to log only error messages.
+
+    With these versions of alsa-lib, the message format is the same as for
+    version 1.2.15 and later, except that the `.<interface>` component is
+    missing. For example:
+
+    **error message:** ::
+
+      ALSA lib ../../../../src/asound/bluealsa-pcm.c:1882:(_snd_pcm_bluealsa_open) [error] Invalid BT device address: 0
+
+    **debug message:** ::
+
+      ALSA lib ../../../../src/asound/bluealsa-pcm.c:829:(bluealsa_hw_params) [debug] /org/bluealsa/hci0/dev_XX_XX_XX_XX_XX_XX/a2dpsrc/sink: Initializing HW
 
 FILES
 =====

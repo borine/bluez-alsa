@@ -21,14 +21,14 @@ void logging_init(void) {
 
 	const char *env_log_level = getenv("BLUEALSA_LOG_LEVEL");
 	if (env_log_level && *env_log_level) {
-		if (strcmp(env_log_level, "error") == 0)
-			logging_private = BA_LOG_ERR;
-		else if (strcmp(env_log_level, "warning") == 0)
+		if (strcmp(env_log_level, "warning") == 0)
 			logging_private = BA_LOG_WARN;
 		else if (strcmp(env_log_level, "info") == 0)
 			logging_private = BA_LOG_INFO;
-		else
+		else if (strcmp(env_log_level, "debug") == 0)
 			logging_private = BA_LOG_DEBUG;
+		else
+			logging_private = BA_LOG_ERR;
 	}
 finish:
 	pthread_mutex_unlock(&mutex);
