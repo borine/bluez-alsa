@@ -42,6 +42,7 @@
 #if WITH_LIBSAMPLERATE
 # include "resampler.h"
 #endif
+#include "player.h"
 
 /* Many devices cannot synchronize A/V with very high audio latency. To keep
  * the overall latency below 400ms we choose default ALSA parameters such that
@@ -341,37 +342,6 @@ static struct io_worker *get_active_io_worker(void) {
 	pthread_rwlock_unlock(&workers_lock);
 
 	return w;
-}
-
-static int pause_device_player(const struct ba_pcm *ba_pcm) {
-
-	DBusMessage *msg = NULL, *rep = NULL;
-	DBusError err = DBUS_ERROR_INIT;
-	char path[160];
-	int ret = 0;
-
-	snprintf(path, sizeof(path), "%s/player0", ba_pcm->device_path);
-	msg = dbus_message_new_method_call("org.bluez", path, "org.bluez.MediaPlayer1", "Pause");
-
-	if ((rep = dbus_connection_send_with_reply_and_block(dbus_ctx.conn, msg,
-					DBUS_TIMEOUT_USE_DEFAULT, &err)) == NULL) {
-		warn("Couldn't pause player: %s", err.message);
-		dbus_error_free(&err);
-		goto fail;
-	}
-
-	debug("Requested playback pause");
-	goto final;
-
-fail:
-	ret = -1;
-
-final:
-	if (msg != NULL)
-		dbus_message_unref(msg);
-	if (rep != NULL)
-		dbus_message_unref(rep);
-	return ret;
 }
 
 /**
@@ -748,7 +718,7 @@ static void *io_worker_routine(struct io_worker *w) {
 				 * we are going to send pause command every 0.5 second. */
 				if (pause_retries < 5 &&
 						(pause_retry_pcm_samples += read_samples) > pcm_1s_samples / 2) {
-					if (pause_device_player(&w->ba_pcm) == -1)
+					if (!player_pause(w->ba_pcm.device_path, dbus_ctx.conn))
 						/* pause command does not work, stop further requests */
 						pause_retries = 5;
 					pause_retry_pcm_samples = 0;
@@ -1597,6 +1567,9 @@ int main(int argc, char *argv[]) {
 
 	if (!ba_dbus_pcm_get_all(&dbus_ctx, &ba_pcms, &ba_pcms_count, &err))
 		warn("Couldn't get BlueALSA PCM list: %s", err.message);
+
+	if (!player_init(&dbus_ctx, &err))
+		warn("Couldn't initialize player monitor: %s", err.message);
 
 	for (size_t i = 0; i < ba_pcms_count; i++)
 		supervise_io_worker(&ba_pcms[i]);
