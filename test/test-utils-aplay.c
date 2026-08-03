@@ -184,7 +184,7 @@ CK_START_TEST(test_play_all) {
 
 } CK_END_TEST
 
-CK_START_TEST(test_play_single_audio) {
+CK_START_TEST(test_play_multi_source_wait) {
 
 	struct spawn_process sp_ba_mock;
 	ck_assert_int_ne(spawn_bluealsa_mock(&sp_ba_mock, NULL, true,
@@ -193,7 +193,7 @@ CK_START_TEST(test_play_single_audio) {
 
 	struct spawn_process sp_ba_aplay;
 	ck_assert_int_ne(spawn_bluealsa_aplay(&sp_ba_aplay,
-				"--single-audio",
+				"--multi-source-mode=wait",
 				"--pcm=null",
 				"--volume=none",
 				"-v", "-v", "-v",
@@ -370,7 +370,7 @@ int main(int argc, char *argv[]) {
 	tcase_add_test(tc, test_list_devices);
 	tcase_add_test(tc, test_list_pcms);
 	tcase_add_test(tc, test_play_all);
-	tcase_add_test(tc, test_play_single_audio);
+	tcase_add_test(tc, test_play_multi_source_wait);
 	tcase_add_test(tc, test_play_mixer_setup);
 	tcase_add_test(tc, test_play_dbus_signals);
 #if WITH_LIBSAMPLERATE

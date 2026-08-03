@@ -1,6 +1,6 @@
 /*
  * BlueALSA - aplay.c
- * SPDX-FileCopyrightText: 2016-2025 BlueALSA developers
+ * SPDX-FileCopyrightText: 2016-2026 BlueALSA developers
  * SPDX-License-Identifier: MIT
  */
 
@@ -52,6 +52,10 @@
 #define DEFAULT_PERIOD_TIME_SCO 20000
 #define DEFAULT_PERIODS 4
 
+/* How many seconds to keep worker de-activated after playback is stolen from
+ * it. */
+#define MULTIPOINT_DEACTIVATE_TIME 10
+
 enum profile {
 	PROFILE_A2DP,
 	PROFILE_ASHA,
@@ -63,6 +67,12 @@ enum volume_type {
 	VOL_TYPE_MIXER,
 	VOL_TYPE_SOFTWARE,
 	VOL_TYPE_NONE,
+};
+
+enum multi_source_mode_t {
+	MULTI_SOURCE_MODE_MIX,
+	MULTI_SOURCE_MODE_WAIT,
+	MULTI_SOURCE_MODE_MULTIPOINT,
 };
 
 struct io_worker {
@@ -82,6 +92,8 @@ struct io_worker {
 	struct alsa_mixer alsa_mixer;
 	/* if true, playback is active */
 	atomic_bool active;
+	/* flag indicating some other worker wants this one to pause */
+	atomic_bool force_pause;
 	/* human-readable BT address */
 	char addr[18];
 };
@@ -114,7 +126,7 @@ static struct ba_pcm *ba_pcms = NULL;
 static size_t ba_pcms_count = 0;
 
 static pthread_mutex_t single_playback_mutex = PTHREAD_MUTEX_INITIALIZER;
-static bool force_single_playback = false;
+static enum multi_source_mode_t multi_source_mode = MULTI_SOURCE_MODE_MIX;
 
 static pthread_rwlock_t workers_lock = PTHREAD_RWLOCK_INITIALIZER;
 static struct io_worker *workers[16] = { NULL };
@@ -591,8 +603,12 @@ static void *io_worker_routine(struct io_worker *w) {
 	delay_report_init(&dr, &dbus_ctx, &w->ba_pcm);
 
 	size_t pause_retry_pcm_samples = pcm_1s_samples;
+	size_t pause_retries = 0;
+	bool pausing = false;
+	bool deactivated = false;
+	/* Does the AVRCP Pause command work? */
+	bool pauseable = (w->ba_pcm.transport & BA_PCM_TRANSPORT_MASK_A2DP);
 
-	bool device_pausable = true;
 	int timeout = -1;
 
 	debug("Starting IO loop");
@@ -640,10 +656,13 @@ static void *io_worker_routine(struct io_worker *w) {
 		}
 
 		if (poll_rv == 0) {
-			if (!w->active) {
+			deactivated = false;
+			if (pausing) {
 				/* Timeout of paused player. It is now OK to stop sending
 				 * Pause requests. */
+				pausing = false;
 				pause_retry_pcm_samples = 0;
+				pause_retries = 0;
 				timeout = -1;
 				continue;
 			}
@@ -700,42 +719,107 @@ static void *io_worker_routine(struct io_worker *w) {
 			ffb_seek(&read_buffer, read_samples);
 
 		}
-		else if (fds[1].revents & POLLHUP) {
+		if (fds[1].revents & POLLHUP) {
 			/* Source PCM FIFO has been terminated on the writing side. */
 			debug("BlueALSA source PCM disconnected: %s", w->ba_pcm.pcm_path);
 			ba_pcm_running = false;
 			break;
 		}
-		else if (fds[1].revents) {
+		if (fds[1].revents & ~(POLLIN|POLLHUP)) {
 			error("Unexpected BlueALSA source PCM poll event: %#x", fds[1].revents);
 		}
 
-		/* If current worker is not active and the single playback mode was
-		 * enabled, we have to check if there is any other active worker. */
-		if (!w->active) {
-
-			/* Before checking active worker, we need to lock the single playback
-			 * mutex. It is required to lock it, because the active state is changed
-			 * in the worker thread after opening the PCM device, so we have to
-			 * synchronize all threads at this point. */
+		if (multi_source_mode == MULTI_SOURCE_MODE_MULTIPOINT) {
+			/* Before checking active worker, we need to lock the single
+			 * playback mutex. It is required to lock it, because the active
+			 * state is changed in the worker thread after opening the PCM
+			 * device, so we have to synchronize all threads at this point. */
 			pthread_mutex_lock(&single_playback_mutex);
 			single_playback_mutex_locked = true;
 
-			if (get_active_io_worker() != NULL) {
-				/* In order not to flood BT connection with AVRCP packets,
-				 * we are going to send pause command every 1 second.
-				 * Some devices send several seconds of silence after they are
-				 * paused, and it is possible the user may press play in this
-				 * time. So we continue to repeat the pause request until
-				 * the device eventually stops to ensure that attempts to
-				 * re-start are caught and recieve a pause request. */
-				if (device_pausable && (pause_retry_pcm_samples += read_samples) > pcm_1s_samples) {
-					if (!player_pause(w->ba_pcm.device_path, dbus_ctx.conn))
-						/* pause command does not work, stop further requests */
-						device_pausable = false;
-					pause_retry_pcm_samples = 0;
-					timeout = 100;
+			if (!w->active) {
+				struct io_worker *active_worker;
+				if ((active_worker = get_active_io_worker()) != NULL) {
+					if (!(active_worker->ba_pcm.transport & BA_PCM_TRANSPORT_MASK_A2DP)) {
+						/* Do not steal playback from SCO or ASHA streams */
+						deactivated = true;
+						pausing = true;
+					}
+					if (!deactivated) {
+						active_worker->force_pause = true;
+						/* The new worker must wait for the active worker
+						 * to action the force_pause request.
+						 * Discard initial samples while waiting for
+						 * active worker to yield */
+						ffb_rewind(&read_buffer);
+						timeout = -1;
+						continue;
+					}
 				}
+				else if (deactivated) {
+					/* There are now no active workers, so no more need for
+					 * deactivation or pausing. */
+					deactivated = false;
+					pausing = false;
+					pause_retry_pcm_samples = 0;
+					pause_retries = 0;
+					timeout = -1;
+					continue;
+				}
+#if DEBUG
+				else
+					debug("Device %s stealing playback", w->addr);
+#endif
+			}
+			else if (w->force_pause) {
+				w->force_pause = false;
+				pausing = true;
+			}
+		}
+		else if (multi_source_mode == MULTI_SOURCE_MODE_WAIT) {
+			if (!w->active) {
+				/* Before checking active worker, we need to lock the single playback
+				 * mutex. It is required to lock it, because the active state is changed
+				 * in the worker thread after opening the PCM device, so we
+				 * have to synchronize all threads at this point. */
+				pthread_mutex_lock(&single_playback_mutex);
+				single_playback_mutex_locked = true;
+				if ((get_active_io_worker()) != NULL)
+					pausing = true;
+			}
+		}
+
+		if (pausing) {
+			/* In order not to flood BT connection with AVRCP packets, we are
+			 * going to send pause command every 1 second.
+			 * Some devices send 10 seconds or more of silence after they are
+			 * paused, and it is possible the user may press play in this
+			 * time. So we continue to repeat the pause request until the
+			 * device eventually stops to ensure that attempts to re-start are
+			 * caught and receive another pause request. If the device ignores
+			 * pause requests and never stops, then we cease sending pause
+			 * requests and allow the worker to steal back playback after
+			 * MULTIPOINT_DEACTIVATE_TIME seconds. */
+			if (pause_retries < MULTIPOINT_DEACTIVATE_TIME) {
+				if ((pause_retry_pcm_samples += read_samples) > pcm_1s_samples) {
+					if (pauseable &&
+						!player_pause(w->ba_pcm.device_path, dbus_ctx.conn))
+						/* pause command does not work, stop further requests */
+						pauseable = false;
+					pause_retry_pcm_samples = 0;
+					pause_retries++;
+				}
+			}
+
+			timeout = 100;
+			if (multi_source_mode == MULTI_SOURCE_MODE_MULTIPOINT && w->active) {
+				deactivated = true;
+				goto close_alsa;
+			}
+			else {
+				/* We must discard any audio that was received before the pause
+				 * request to prevent clicks when the pause is released. */
+				ffb_rewind(&read_buffer);
 				continue;
 			}
 		}
@@ -743,6 +827,14 @@ static void *io_worker_routine(struct io_worker *w) {
 		if (!alsa_pcm_is_open(&w->alsa_pcm)) {
 
 			if (pcm_open_retries > 0) {
+				if (multi_source_mode == MULTI_SOURCE_MODE_MULTIPOINT &&
+						pcm_open_retries > ARRAYSIZE(pcm_open_retry_intervals)) {
+					w->active = false;
+					deactivated = true;
+					pausing = true;
+					continue;
+				}
+
 				/* After PCM open failure wait some time before retry. This can not be
 				 * done with a sleep() call, because we have to drain PCM FIFO, so it
 				 * will not have any stale data. */
@@ -971,6 +1063,8 @@ static void *io_worker_routine(struct io_worker *w) {
 device_inactive:
 		debug("BT device marked as inactive: %s", w->addr);
 		pause_retry_pcm_samples = pcm_1s_samples;
+		pause_retries = 0;
+		pausing = false;
 		timeout = -1;
 
 close_alsa:
@@ -985,7 +1079,8 @@ close_alsa:
 		alsa_pcm_close(&w->alsa_pcm);
 		alsa_mixer_close(&w->alsa_mixer);
 		pthread_mutex_unlock(&w->mutex);
-		w->active = !force_single_playback;
+		w->active = (multi_source_mode == MULTI_SOURCE_MODE_MIX);
+		w->force_pause = false;
 	}
 
 fail:
@@ -1086,7 +1181,8 @@ static struct io_worker *supervise_io_worker_start(const struct ba_pcm *ba_pcm) 
 	memcpy(&worker->ba_pcm, ba_pcm, sizeof(worker->ba_pcm));
 	alsa_pcm_init(&worker->alsa_pcm);
 	alsa_mixer_init(&worker->alsa_mixer, io_worker_mixer_event_callback, worker);
-	worker->active = !force_single_playback;
+	worker->active = (multi_source_mode == MULTI_SOURCE_MODE_MIX);
+	worker->force_pause = false;
 
 	debug("Starting IO worker %s", worker->addr);
 	if ((errno = pthread_create(&worker->thread, NULL,
@@ -1248,11 +1344,12 @@ int main(int argc, char *argv[]) {
 		{ "mixer-device", required_argument, NULL, 'M' },
 		{ "mixer-control", required_argument, NULL, 6 },
 		{ "mixer-index", required_argument, NULL, 7 },
+		{ "multi-source-mode", required_argument, NULL, 5 },
 		{ "profile", required_argument, NULL, 'p' },
 #if WITH_LIBSAMPLERATE
 		{ "resampler", required_argument, NULL, 10},
 #endif
-		{ "single-audio", no_argument, NULL, 5 },
+		{ "multiple-source-mode", no_argument, NULL, 5 },
 		{ 0, 0, 0, 0 },
 	};
 
@@ -1276,6 +1373,13 @@ int main(int argc, char *argv[]) {
 		{ "mixer", .v.u = VOL_TYPE_MIXER },
 		{ "software", .v.u = VOL_TYPE_SOFTWARE },
 		{ "none", .v.u = VOL_TYPE_NONE },
+		{ 0 },
+	};
+
+	static const nv_entry_t nv_multi_source_types[] = {
+		{ "mix", .v.u = MULTI_SOURCE_MODE_MIX },
+		{ "wait", .v.u = MULTI_SOURCE_MODE_WAIT },
+		{ "multipoint", .v.u = MULTI_SOURCE_MODE_MULTIPOINT },
 		{ 0 },
 	};
 
@@ -1320,10 +1424,10 @@ int main(int argc, char *argv[]) {
 					"      --mixer-control=NAME\tmixer control name; default: %s\n"
 					"      --mixer-index=NUM\t\tmixer element index; default: %u\n"
 					"  -p, --profile=TYPE\t\tset profile to handle; default: A2DP\n"
+					"      --multi-source-mode=MODE\thow to handle multiple sources; default: %s\n"
 #if WITH_LIBSAMPLERATE
 					"      --resampler=METHOD\tresample conversion method; default: %s\n"
 #endif
-					"      --single-audio\t\tenable single audio mode\n"
 					"%s"
 					"\nNote:\n"
 					"If one wants to receive audio from more than one Bluetooth device, it is\n"
@@ -1339,6 +1443,7 @@ int main(int argc, char *argv[]) {
 					mixer_device,
 					mixer_elem_name,
 					mixer_elem_index,
+					nv_name_from_uint(nv_multi_source_types, multi_source_mode),
 #if WITH_LIBSAMPLERATE
 					nv_name_from_uint(nv_resampler_methods, resampler_method),
 #endif
@@ -1436,9 +1541,15 @@ int main(int argc, char *argv[]) {
 			mixer_elem_index = atoi(optarg);
 			break;
 
-		case 5 /* --single-audio */ :
-			force_single_playback = true;
-			break;
+		case 5 /* --multi-source-mode */ : {
+			const nv_entry_t * entry;
+			if ((entry = nv_lookup_entry(nv_multi_source_types, optarg)) == NULL) {
+				error("Invalid multi source type {%s}: %s",
+						nv_join_names(nv_multi_source_types), optarg);
+				return EXIT_FAILURE;
+			}
+			multi_source_mode = entry->v.u;
+		} break;
 
 #if WITH_LIBSAMPLERATE
 		case 10 /* --resampler */ : {
@@ -1577,8 +1688,8 @@ int main(int argc, char *argv[]) {
 	if (!ba_dbus_pcm_get_all(&dbus_ctx, &ba_pcms, &ba_pcms_count, &err))
 		warn("Couldn't get BlueALSA PCM list: %s", err.message);
 
-	if (!player_init(&dbus_ctx, &err))
-		warn("Couldn't initialize player monitor: %s", err.message);
+	if (multi_source_mode != MULTI_SOURCE_MODE_MIX && !player_init(&dbus_ctx, &err))
+		warn("Couldn't initialize media player monitor: %s", err.message);
 
 	for (size_t i = 0; i < ba_pcms_count; i++)
 		supervise_io_worker(&ba_pcms[i]);

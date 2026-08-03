@@ -97,7 +97,7 @@ OPTIONS
     that each connection can have a different setup.
 
     If playing multiple streams at the same time is not desired, it is possible
-    to change that behavior by using the **--single-audio** option.
+    to change that behavior by using the **--multi-source-mode** option.
 
     For more information see the EXAMPLES_ section below.
 
@@ -249,17 +249,27 @@ OPTIONS
     See `Delay, timer drift, and resampling`_ in the **NOTES** section below
     for more information.
 
---single-audio
-    Allow only one Bluetooth device to play audio at a time.
-    If multiple devices are connected, only the first to start will play, the
-    others will be paused. When that first device stops, then the next to send
-    audio will be played.
+--multi-source-mode=MODE
+    Select the mode for handling multiple sources connected
+    simultaneously. MODE is one of three values:
 
-    Without this option, **bluealsa-aplay** plays audio from all selected
-    Bluetooth devices.
-    Please note that playing from all Bluetooth devices at a time requires used
-    PCM to be able to mix audio from multiple sources (i.e., it can be opened
-    more than once; for example the ALSA **dmix** plugin).
+    - **mix** play all streams simultaneously. Note that this
+      mode requires that the used ALSA PCM is able to mix audio
+      from multiple sources (i.e., it can be opened more than
+      once; for example the ALSA dmix plugin). This mode is the
+      default when this option is not given.
+
+    - **wait** only the first to start will play, the others
+      will be paused. When that first device stops, then the
+      next to send audio will be played. So the currently
+      playing device takes priority, otber devices must wait.
+
+    - **multipoint** if a connected device is currently playing
+      an A2DP stream and a second connected device is starts
+      playback, then the first device is paused and the second
+      begins takes over the playback PCM. SCO and ASHA streams
+      always take priority and cannot be interrupted. Simulates
+      the "multipoint" mode of many commercial devices.
 
 NOTES
 =====
