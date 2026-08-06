@@ -9,8 +9,10 @@ bin_PROGRAMS = bluealsa-aplay
 bluealsa_aplay_SOURCES = \
 	alsa-mixer.c \
 	alsa-pcm.c \
+	aplay-config.c \
 	dbus.c \
 	delay-report.c \
+	io-worker.c \
 	aplay.c
 
 if WITH_LIBSAMPLERATE
