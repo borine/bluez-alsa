@@ -130,19 +130,23 @@ int resampler_init(
 	resampler->max_delay_diff = RESAMPLER_MAX_CHANGE_MS * in_rate / 1000;
 	resampler->rate_ratio_step_count = 0;
 	resampler->delay_tolerance = RESAMPLER_TOLERANCE_MS * in_rate / 1000;
+	resampler->delay_diff = 0;
 	resampler->nominal_rate_ratio = (double)out_rate / (double)in_rate;
 	resampler->steady_rate_ratio_step_count = 0;
+	resampler->target_delay = 0;
 	resampler->src_data.src_ratio = resampler->nominal_rate_ratio;
 	resampler->input_frames = 0;
 	resampler->last_input_frames = 0;
 	resampler->period = RESAMPLER_PERIOD_MS * in_rate / 1000;
 	resampler->in_rate = in_rate;
+	resampler->reset_ts.tv_sec = 0;
+	resampler->reset_ts.tv_nsec = 0;
 
 	return 0;
 
 fail:
 	resampler_free(resampler);
-	return -1;
+	return errno = ENOMEM, -1;
 }
 
 /**
