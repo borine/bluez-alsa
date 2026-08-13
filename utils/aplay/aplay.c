@@ -591,8 +591,8 @@ static void *io_worker_routine(struct io_worker *w) {
 	delay_report_init(&dr, &dbus_ctx, &w->ba_pcm);
 
 	size_t pause_retry_pcm_samples = pcm_1s_samples;
-	size_t pause_retries = 0;
 
+	bool device_pausable = true;
 	int timeout = -1;
 
 	debug("Starting IO loop");
@@ -639,16 +639,24 @@ static void *io_worker_routine(struct io_worker *w) {
 			goto fail;
 		}
 
-		if (poll_rv == 0 &&
-				ba_pcm_running &&
-				w->active &&
-				ffb_blen_out(&read_buffer) == 0 &&
-				!alsa_pcm_is_running(&w->alsa_pcm)) {
-			/* The BT device is in the running state, but is not sending audio
-			 * frames. As there is no work for the ALSA device to do we simply
-			 * wait for more audio to arrive from the server. */
-			timeout = -1;
-			continue;
+		if (poll_rv == 0) {
+			if (!w->active) {
+				/* Timeout of paused player. It is now OK to stop sending
+				 * Pause requests. */
+				pause_retry_pcm_samples = 0;
+				timeout = -1;
+				continue;
+			}
+			if (ba_pcm_running &&
+					w->active &&
+					ffb_blen_out(&read_buffer) == 0 &&
+					!alsa_pcm_is_running(&w->alsa_pcm)) {
+				/* The BT device is in the running state, but is not sending
+				 * audio frames. As there is no work for the ALSA device to do
+				 * we close it to allow other workers access and mark this
+				 * worker as inactive. */
+				 goto device_inactive;
+			}
 		}
 
 		if (fds[0].revents & POLLIN)
@@ -715,19 +723,21 @@ static void *io_worker_routine(struct io_worker *w) {
 
 			if (get_active_io_worker() != NULL) {
 				/* In order not to flood BT connection with AVRCP packets,
-				 * we are going to send pause command every 0.5 second. */
-				if (pause_retries < 5 &&
-						(pause_retry_pcm_samples += read_samples) > pcm_1s_samples / 2) {
+				 * we are going to send pause command every 1 second.
+				 * Some devices send several seconds of silence after they are
+				 * paused, and it is possible the user may press play in this
+				 * time. So we continue to repeat the pause request until
+				 * the device eventually stops to ensure that attempts to
+				 * re-start are caught and recieve a pause request. */
+				if (device_pausable && (pause_retry_pcm_samples += read_samples) > pcm_1s_samples) {
 					if (!player_pause(w->ba_pcm.device_path, dbus_ctx.conn))
 						/* pause command does not work, stop further requests */
-						pause_retries = 5;
+						device_pausable = false;
 					pause_retry_pcm_samples = 0;
-					pause_retries++;
 					timeout = 100;
 				}
 				continue;
 			}
-
 		}
 
 		if (!alsa_pcm_is_open(&w->alsa_pcm)) {
@@ -961,7 +971,6 @@ static void *io_worker_routine(struct io_worker *w) {
 device_inactive:
 		debug("BT device marked as inactive: %s", w->addr);
 		pause_retry_pcm_samples = pcm_1s_samples;
-		pause_retries = 0;
 		timeout = -1;
 
 close_alsa:
