@@ -10,75 +10,33 @@
 
 #include <poll.h>
 #include <stdbool.h>
-#include <stddef.h>
-
-#include <alsa/asoundlib.h>
 
 typedef void (*alsa_mixer_event_handler)(void *userdata);
 
-struct alsa_mixer {
+void alsa_mixer_init(alsa_mixer_event_handler handler);
 
-	/* The ALSA mixer handle. */
-	snd_mixer_t *mixer;
-	snd_mixer_elem_t *elem;
+int alsa_mixer_open(char **err_msg);
 
-	bool has_db_scale;
-	bool has_mute_switch;
-	long volume_min_value;
-	long volume_max_value;
+void alsa_mixer_close(void);
 
-	alsa_mixer_event_handler event_handler;
-	void *event_handler_userdata;
+bool alsa_mixer_is_open(void);
 
-};
+bool alsa_mixer_has_mute_switch(void);
 
-void alsa_mixer_init(
-		struct alsa_mixer *mixer,
-		alsa_mixer_event_handler handler,
-		void *userdata);
+int alsa_mixer_poll_descriptors_count(void);
 
-int alsa_mixer_open(
-		struct alsa_mixer *mixer,
-		const char *dev_name,
-		const char *elem_name,
-		unsigned int elem_idx,
-		char **msg);
-
-void alsa_mixer_close(
-		struct alsa_mixer *mixer);
-
-inline static bool alsa_mixer_is_open(
-		const struct alsa_mixer *mixer) {
-	return mixer->mixer != NULL && mixer->elem != NULL;
-}
-
-inline static int alsa_mixer_poll_descriptors_count(
-		struct alsa_mixer *mixer) {
-	return snd_mixer_poll_descriptors_count(mixer->mixer);
-}
-
-inline static int alsa_mixer_poll_descriptors(
-		struct alsa_mixer *mixer,
+int alsa_mixer_poll_descriptors(
 		struct pollfd* pfds,
-		unsigned int space) {
-	return snd_mixer_poll_descriptors(mixer->mixer, pfds, space);
-}
+		unsigned int space);
 
-inline static int alsa_mixer_handle_events(
-		struct alsa_mixer *mixer) {
-	return snd_mixer_handle_events(mixer->mixer);
-}
+int alsa_mixer_handle_events(void);
 
-int alsa_mixer_get_volume(
-		const struct alsa_mixer *mixer,
-		unsigned int vmax,
-		unsigned int *volume,
+int alsa_mixer_get_volume_scaling(
+		double *vol_scaling,
 		bool *muted);
 
-int alsa_mixer_set_volume(
-		struct alsa_mixer *mixer,
-		unsigned int vmax,
-		unsigned int volume,
+int alsa_mixer_set_volume_scaling(
+		double vol_scaling,
 		bool muted);
 
 #endif

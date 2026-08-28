@@ -12,10 +12,10 @@
 
 #include "shared/dbus-client-pcm.h"
 
+void io_worker_mixer_event_callback(void *data);
+
 bool io_worker_start(const struct ba_pcm *ba_pcm);
 void io_worker_stop(const struct ba_pcm *ba_pcm);
 void io_worker_cleanup(void);
-
-bool io_worker_mixer_volume_sync_alsa_mixer(struct ba_pcm *ba_pcm);
 
 #endif

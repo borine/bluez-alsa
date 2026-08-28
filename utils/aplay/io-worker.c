@@ -8,6 +8,7 @@
 # include <config.h>
 #endif
 
+#include <math.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -39,8 +40,6 @@ typedef struct {
 	int ba_pcm_fd;
 	/* file descriptor of PCM control */
 	int ba_pcm_ctrl_fd;
-	/* mixer for volume control */
-	struct alsa_mixer alsa_mixer;
 	/* if true, playback is active */
 	atomic_bool active;
 	/* human-readable BT address */
@@ -82,41 +81,6 @@ static bool pcm_hw_params_equal(
 	return true;
 }
 
-/**
- * Update BlueALSA PCM volume according to ALSA mixer element. */
-static int io_worker_mixer_volume_sync_ba_pcm(
-		io_worker_t *worker,
-		struct ba_pcm *ba_pcm) {
-
-	unsigned int volume;
-	/* If mixer element does not support playback switch,
-	 * use our global muted state as a default value. */
-	bool muted = pcm_muted;
-
-	const int vmax = BA_PCM_VOLUME_MAX(ba_pcm);
-	if (alsa_mixer_get_volume(&worker->alsa_mixer, vmax, &volume, &muted) != 0)
-		return -1;
-
-	for (size_t i = 0; i < ba_pcm->channels; i++) {
-		ba_pcm->volume[i].muted = muted;
-		ba_pcm->volume[i].volume = volume;
-	}
-
-	DBusError err = DBUS_ERROR_INIT;
-	if (!ba_dbus_pcm_update(&config.dbus_ctx, ba_pcm, BLUEALSA_PCM_VOLUME, &err)) {
-		error("Couldn't update BlueALSA source PCM: %s", err.message);
-		dbus_error_free(&err);
-		return -1;
-	}
-
-	return 0;
-}
-
-static void io_worker_mixer_event_callback(void *data) {
-	io_worker_t *worker = data;
-	io_worker_mixer_volume_sync_ba_pcm(worker, &worker->ba_pcm);
-}
-
 static snd_pcm_uframes_t io_worker_playback_delay(
 		const io_worker_t *w, const io_worker_output_t *output,
 		const ffb_t *read_buffer) {
@@ -134,31 +98,125 @@ static snd_pcm_uframes_t io_worker_playback_delay(
 	return delay;
 }
 
+/**
+ * Update BlueALSA PCM volume according to given volume scaling and mute state. */
+static void io_worker_mixer_ba_pcm_set_volume(
+		struct ba_pcm *ba_pcm,
+		double vol_scaling,
+		bool muted) {
+
+	const int vmax = BA_PCM_VOLUME_MAX(ba_pcm);
+	long volume = lround(vmax * vol_scaling);
+	assert(volume < 0x80);
+
+	for (size_t i = 0; i < ba_pcm->channels; i++) {
+		ba_pcm->volume[i].muted = muted;
+		ba_pcm->volume[i].volume = volume;
+	}
+
+	DBusError err = DBUS_ERROR_INIT;
+	if (!ba_dbus_pcm_update(&config.dbus_ctx, ba_pcm, BLUEALSA_PCM_VOLUME, &err)) {
+		error("Couldn't update BlueALSA source PCM: %s", err.message);
+		dbus_error_free(&err);
+	}
+}
+
+/**
+ * Update one BlueALSA PCM volume according to ALSA mixer element. */
+static void io_worker_mixer_volume_sync_ba_pcm(struct ba_pcm *ba_pcm) {
+	double vol_scaling;
+	bool muted;
+
+	if (alsa_mixer_is_open()) {
+		if (alsa_mixer_get_volume_scaling(&vol_scaling, &muted) < 0) {
+			error("Couldn't get ALSA mixer volume");
+			return;
+		}
+		io_worker_mixer_ba_pcm_set_volume(ba_pcm, vol_scaling, muted);
+	}
+}
+
+/**
+ * Update ALSA mixer element according to BlueALSA PCM volume. */
+static bool io_worker_mixer_volume_sync_alsa_mixer(const struct ba_pcm *ba_pcm) {
+	bool ret = false;
+
+	/* Skip update in case of software volume. */
+	if (ba_pcm->soft_volume)
+		return 0;
+
+	if (!alsa_mixer_is_open())
+		goto final;
+
+	/* User can connect BlueALSA PCM to mono, stereo or multi-channel output.
+	 * For mono input (audio from BlueALSA PCM), the case is simple: we are
+	 * changing all output channels at once. However, for stereo input it is
+	 * not possible to know how to control left/right volume unless there is
+	 * some kind of channel mapping. In order to simplify things, we will set
+	 * all channels to the average left-right volume. */
+
+	unsigned int volume_sum = 0, muted = 0;
+	for (size_t i = 0; i < ba_pcm->channels; i++) {
+		volume_sum += ba_pcm->volume[i].volume;
+		muted |= ba_pcm->volume[i].muted;
+	}
+
+	/* keep local muted state up to date */
+	pcm_muted = muted;
+
+	const unsigned int vmax = BA_PCM_VOLUME_MAX(ba_pcm);
+	const double vol_scaling = (double)volume_sum / (vmax * ba_pcm->channels);
+	ret = (alsa_mixer_set_volume_scaling(vol_scaling, muted) == 0);
+
+final:
+	return ret;
+}
+
+/**
+ * Update all active BlueALSA PCMs volume according to ALSA mixer element. */
+void io_worker_mixer_event_callback(void *data) {
+	(void) data;
+
+	double vol_scaling;
+	bool muted;
+
+	if (alsa_mixer_get_volume_scaling(&vol_scaling, &muted) < 0) {
+		warn("Couldn't get ALSA mixer volume");
+		return;
+	}
+
+	for (size_t i = 0; i < workers_size; i++) {
+		if (workers[i] && workers[i]->active) {
+			pthread_mutex_lock(&workers[i]->mutex);
+			io_worker_mixer_ba_pcm_set_volume(&workers[i]->ba_pcm, vol_scaling, muted);
+			pthread_mutex_unlock(&workers[i]->mutex);
+		}
+	}
+}
+
 void io_worker_print_config(
 			const io_worker_t *w,
 			const io_worker_input_t *input,
 			const io_worker_output_t *output) {
 
 	info("Used configuration for %s:\n"
-			"  BlueALSA PCM format: %s\n"
-			"  BlueALSA PCM sample rate: %u Hz\n"
-			"  BlueALSA PCM channels: %u\n"
-			"  ALSA PCM buffer time: %u us (%zu bytes)\n"
-			"  ALSA PCM period time: %u us (%zu bytes)\n"
-			"  ALSA PCM format: %s\n"
-			"  ALSA PCM sample rate: %u Hz\n"
-			"  ALSA PCM channels: %u\n"
-			"  ALSA mixer volume mapping: %s",
-			w->addr,
-			snd_pcm_format_name(input->pcm_format),
-			w->ba_pcm.rate,
-			w->ba_pcm.channels,
-			output->pcm.buffer_time, alsa_pcm_frames_to_bytes(&output->pcm, output->pcm.buffer_frames),
-			output->pcm.period_time, alsa_pcm_frames_to_bytes(&output->pcm, output->pcm.period_frames),
-			snd_pcm_format_name(output->pcm.format),
-			output->pcm.rate,
-			output->pcm.channels,
-			w->alsa_mixer.mixer ? (w->alsa_mixer.has_db_scale ? "dB scale" : "linear") : "none");
+		"  BlueALSA PCM format: %s\n"
+		"  BlueALSA PCM sample rate: %u Hz\n"
+		"  BlueALSA PCM channels: %u\n"
+		"  ALSA PCM buffer time: %u us (%zu bytes)\n"
+		"  ALSA PCM period time: %u us (%zu bytes)\n"
+		"  ALSA PCM format: %s\n"
+		"  ALSA PCM sample rate: %u Hz\n"
+		"  ALSA PCM channels: %u\n",
+		w->addr,
+		snd_pcm_format_name(input->pcm_format),
+		input->ba_pcm->rate,
+		input->ba_pcm->channels,
+		output->pcm.buffer_time, alsa_pcm_frames_to_bytes(&output->pcm, output->pcm.buffer_frames),
+		output->pcm.period_time, alsa_pcm_frames_to_bytes(&output->pcm, output->pcm.period_frames),
+		snd_pcm_format_name(output->pcm.format),
+		output->pcm.rate,
+		output->pcm.channels);
 	if (config.verbose >= 3)
 		alsa_pcm_dump(&output->pcm, stderr);
 }
@@ -212,23 +270,9 @@ static int io_worker_active_check(io_worker_t *w,
 		single_playback_reset(sp);
 		debug("BT device marked as active: %s", w->addr);
 
-		/* Skip mixer setup in case of software volume. */
-		if (config.mixer_device != NULL && !w->ba_pcm.soft_volume) {
-			char *tmp = NULL;
-			pthread_mutex_lock(&w->mutex);
-			debug("Opening ALSA mixer: name=%s elem=%s index=%u",
-					config.mixer_device, config.mixer_elem_name,
-					config.mixer_elem_index);
-			if (alsa_mixer_open(&w->alsa_mixer, config.mixer_device,
-					config.mixer_elem_name, config.mixer_elem_index,
-					&tmp) == 0)
-				io_worker_mixer_volume_sync_ba_pcm(w, &w->ba_pcm);
-			else {
-				warn("Couldn't open ALSA mixer: %s", tmp);
-				free(tmp);
-			}
-			pthread_mutex_unlock(&w->mutex);
-		}
+		/* Set device initial volume only if not using soft-volume */
+		if (!w->ba_pcm.soft_volume)
+			io_worker_mixer_volume_sync_ba_pcm(&w->ba_pcm);
 	}
 
 finish:
@@ -244,7 +288,7 @@ static int io_worker_do_output(
 				size_t read_samples,
 				bool drain) {
 
-	const bool force_mute = (!w->alsa_mixer.has_mute_switch && pcm_muted);
+	const bool force_mute = (!alsa_mixer_has_mute_switch() && pcm_muted);
 	int timeout;
 
 	errno = 0;
@@ -288,24 +332,11 @@ static void io_worker_event_loop(
 	struct pollfd fds[16] = {
 		{ config.main_loop_quit_event_fd, POLLIN, 0 },
 		{ input->ba_pcm_fd, POLLIN, 0 }};
-
+	const nfds_t nfds = 2;
 	int timeout = -1;
 	bool config_printed = false;
 
 	for (;;) {
-		nfds_t nfds = 2;
-
-		if (alsa_mixer_is_open(&w->alsa_mixer)) {
-			nfds += alsa_mixer_poll_descriptors_count(&w->alsa_mixer);
-			if (nfds <= ARRAYSIZE(fds))
-				alsa_mixer_poll_descriptors(&w->alsa_mixer, fds + 2, nfds - 2);
-			else {
-				error("Poll FD array size exceeded: %zu > %zu", (size_t)nfds, ARRAYSIZE(fds));
-				/* Terminate the worker thread if it cannot poll all events. */
-				break;
-			}
-		}
-
 		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
 		int poll_rv = poll(fds, nfds, timeout);
 		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
@@ -352,67 +383,51 @@ static void io_worker_event_loop(
 			io_worker_output_close(output);
 			single_playback_reset(sp);
 			delay_report_reset(dr);
-			pthread_mutex_lock(&w->mutex);
-			alsa_mixer_close(&w->alsa_mixer);
-			pthread_mutex_unlock(&w->mutex);
 			w->active = !config.force_single_playback;
 			continue;
 		}
 
 		ssize_t read_samples = 0;
 		if (fds[1].revents & POLLIN) {
-			if ((read_samples = io_worker_input_read(input, !w->active, output->use_resampler)) == -1)
+			if ((read_samples = io_worker_input_read(input, !w->active, output->use_resampler)) == -1) {
+				error("Error reading from FIFO (%s)", strerror(errno));
 				break;
+			}
 
 			if (read_samples == 0 && !io_worker_output_is_running(output)) {
 				debug("BlueALSA source PCM has disconnected");
 				break;
 			}
 		}
+		else {
+			error("Unexpected poll event on FIFO: %d", fds[1].revents);
+			break;
+		}
 
-		/* A mixer event may have pre-empted a timeout set by the output, so
-		 * to be sure we do not miss an ALSA PCM deadline we must invoke an
-		 * output iteration even if there is no new input, before calling
-		 * poll() again */
 		if ((timeout = io_worker_active_check(w, output, sp, &input->buffer, read_samples)) == -1 && errno != EAGAIN)
 			break;
 
-		if (timeout != 0)
-			continue;
+		if (timeout == 0) {
+			/* On the first iteration after opening the output print the setup. */
+			if (config.verbose >= 2 && !config_printed) {
+				single_playback_lock(sp);
+				io_worker_print_config(w, input, output);
+				single_playback_unlock(sp);
+				config_printed = true;
+			}
 
-		/* On the first iteration after opening the output print the setup. */
-		if (config.verbose >= 2 && !config_printed) {
-			single_playback_lock(sp);
-			io_worker_print_config(w, input, output);
-			single_playback_unlock(sp);
-			config_printed = true;
+			/* Write samples to the output */
+			timeout = io_worker_do_output(w, input, output, dr, 0, !ba_pcm_running);
 		}
-
-		/* Write samples to the output */
-		timeout = io_worker_do_output(w, input, output, dr, 0, !ba_pcm_running);
-		if (timeout < 0 && errno != EAGAIN) {
-			/* When the output has failed, suspend processing of mixer events
-			 * until the output has been re-opened */
-			pthread_mutex_lock(&w->mutex);
-			alsa_mixer_close(&w->alsa_mixer);
-			pthread_mutex_unlock(&w->mutex);
-		}
-
-		/* Mixer events are lower priority than PCM events, so process these
-		 * only after PCM I/O has been dealt with. */
-		if (alsa_mixer_is_open(&w->alsa_mixer))
-			alsa_mixer_handle_events(&w->alsa_mixer);
-
 	}
 }
 
 static void io_worker_routine_exit(io_worker_t *w) {
-
-	pthread_mutex_lock(&w->mutex);
-	alsa_mixer_close(&w->alsa_mixer);
+#if !DEBUG
+	(void) w;
+#else
 	debug("Exiting IO worker %s", w->addr);
-	pthread_mutex_unlock(&w->mutex);
-
+#endif
 }
 
 static void *io_worker_routine(io_worker_t *w) {
@@ -488,12 +503,12 @@ static io_worker_t *io_worker_create(const char *addr) {
 
 static bool io_worker_start_private(io_worker_t *worker, const struct ba_pcm *ba_pcm) {
 	memcpy(&worker->ba_pcm, ba_pcm, sizeof(worker->ba_pcm));
-	alsa_mixer_init(&worker->alsa_mixer, io_worker_mixer_event_callback, worker);
 	worker->active = !config.force_single_playback;
 
 	if ((errno = pthread_create(&worker->thread, NULL,
 					PTHREAD_FUNC(io_worker_routine), worker)) == 0) {
 		worker->thread_started = true;
+		io_worker_mixer_volume_sync_ba_pcm(&worker->ba_pcm);
 		return true;
 	}
 
@@ -514,58 +529,6 @@ static void io_worker_destroy(io_worker_t *w) {
 	io_worker_stop_private(w);
 	pthread_mutex_destroy(&w->mutex);
 	free(w);
-}
-
-/**
- * Update ALSA mixer element according to BlueALSA PCM volume. */
-bool io_worker_mixer_volume_sync_alsa_mixer(struct ba_pcm *ba_pcm) {
-	io_worker_t *worker = NULL;
-	bool ret = false;
-
-	pthread_rwlock_rdlock(&workers_lock);
-
-	for (size_t i = 0; i < workers_size; i++)
-		if (workers[i] && strcmp(workers[i]->ba_pcm.pcm_path, ba_pcm->pcm_path) == 0) {
-			worker = workers[i];
-			break;
-		}
-
-	pthread_rwlock_unlock(&workers_lock);
-
-	if (worker == NULL)
-		return false;
-
-	/* This function is called by the D-Bus signal handler, so we have to
-	 * make sure that we will not have any interference from the IO thread
-	 * trying to modify ALSA mixer at the same time. */
-	pthread_mutex_lock(&worker->mutex);
-
-	if (!alsa_mixer_is_open(&worker->alsa_mixer))
-		goto final;
-
-	/* User can connect BlueALSA PCM to mono, stereo or multi-channel output.
-	 * For mono input (audio from BlueALSA PCM), the case is simple: we are
-	 * changing all output channels at once. However, for stereo input it is
-	 * not possible to know how to control left/right volume unless there is
-	 * some kind of channel mapping. In order to simplify things, we will set
-	 * all channels to the average left-right volume. */
-
-	unsigned int volume_sum = 0, muted = 0;
-	for (size_t i = 0; i < ba_pcm->channels; i++) {
-		volume_sum += ba_pcm->volume[i].volume;
-		muted |= ba_pcm->volume[i].muted;
-	}
-
-	/* keep local muted state up to date */
-	pcm_muted = muted;
-
-	const unsigned int vmax = BA_PCM_VOLUME_MAX(ba_pcm);
-	const unsigned int volume = volume_sum / ba_pcm->channels;
-	ret = (alsa_mixer_set_volume(&worker->alsa_mixer, vmax, volume, muted) == 0);
-
-final:
-	pthread_mutex_unlock(&worker->mutex);
-	return ret;
 }
 
 bool io_worker_start(const struct ba_pcm *ba_pcm) {
@@ -592,6 +555,9 @@ bool io_worker_start(const struct ba_pcm *ba_pcm) {
 			else {
 				pthread_mutex_lock(&workers[i]->mutex);
 				workers[i]->ba_pcm.running = ba_pcm->running;
+				/* Skip volume update in case of software volume. */
+				if (!ba_pcm->soft_volume && workers[i]->active && ba_pcm->running)
+					io_worker_mixer_volume_sync_alsa_mixer(ba_pcm);
 				pthread_mutex_unlock(&workers[i]->mutex);
 				return true;
 			}

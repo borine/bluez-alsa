@@ -26,14 +26,15 @@
 #include <bluetooth/bluetooth.h>
 #include <dbus/dbus.h>
 
+#include "alsa-mixer.h"
 #include "aplay-config.h"
+#include "dbus.h"
+#include "io-worker.h"
 #include "shared/dbus-client.h"
 #include "shared/dbus-client-pcm.h"
 #include "shared/defs.h"
 #include "shared/log.h"
 #include "shared/nv.h"
-#include "dbus.h"
-#include "io-worker.h"
 
 /* Many devices cannot synchronize A/V with very high audio latency. To keep
  * the overall latency below 400ms we choose default ALSA parameters such that
@@ -367,12 +368,8 @@ static DBusHandlerResult dbus_signal_handler(DBusConnection *conn, DBusMessage *
 		dbus_message_iter_next(&iter);
 		if (!dbus_message_iter_get_ba_pcm_props(&iter, NULL, pcm))
 			goto fail;
-		/* Skip update in case of software volume. */
-		if (pcm->soft_volume)
-			return DBUS_HANDLER_RESULT_HANDLED;
 
-		if (supervise_io_worker(pcm))
-			io_worker_mixer_volume_sync_alsa_mixer(pcm);
+		supervise_io_worker(pcm);
 
 		return DBUS_HANDLER_RESULT_HANDLED;
 	}
@@ -729,6 +726,17 @@ int main(int argc, char *argv[]) {
 		return EXIT_FAILURE;
 	}
 
+	/* Open the ALSA mixer before opening any PCMs. */
+	if (!(config.volume_type == VOL_TYPE_SOFTWARE || config.volume_type == VOL_TYPE_NONE)) {
+		debug("Opening ALSA mixer");
+		alsa_mixer_init(io_worker_mixer_event_callback);
+		char *msg = NULL;
+		if (alsa_mixer_open(&msg) != 0) {
+			warn("Couldn't open ALSA mixer: %s", msg);
+			free(msg);
+		}
+	}
+
 	if (!ba_dbus_pcm_get_all(&config.dbus_ctx, &ba_pcms, &ba_pcms_count, &err))
 		warn("Couldn't get BlueALSA PCM list: %s", err.message);
 
@@ -746,26 +754,44 @@ int main(int argc, char *argv[]) {
 	debug("Starting main loop");
 	for (;;) {
 
-		struct pollfd fds[10] = {
+		struct pollfd fds[16] = {
 			{ config.main_loop_quit_event_fd, POLLIN, 0 } };
-		nfds_t nfds = ARRAYSIZE(fds) - 1;
+		nfds_t fd_count = 1;
+		nfds_t avail_fds = ARRAYSIZE(fds) - fd_count;
 
-		if (!ba_dbus_connection_poll_fds(&config.dbus_ctx, &fds[1], &nfds)) {
+		nfds_t dbus_fds = avail_fds;
+		if (!ba_dbus_connection_poll_fds(&config.dbus_ctx, &fds[fd_count], &dbus_fds)) {
 			error("Couldn't get D-Bus connection file descriptors");
 			return EXIT_FAILURE;
 		}
+		avail_fds -= dbus_fds;
+		fd_count += dbus_fds;
 
-		if (poll(fds, nfds + 1, -1) == -1 &&
+		if (alsa_mixer_is_open()) {
+			nfds_t alsa_fds;
+			alsa_fds = alsa_mixer_poll_descriptors_count();
+			if (alsa_fds > avail_fds ||
+					alsa_mixer_poll_descriptors(&fds[fd_count], alsa_fds) <= 0) {
+				error("Couldn't get ALSA mixer file descriptors");
+				alsa_mixer_close();
+			}
+			if (alsa_mixer_is_open())
+				fd_count += alsa_fds;
+		}
+
+		if (poll(fds, fd_count, -1) == -1 &&
 				errno == EINTR)
 			continue;
 
 		if (fds[0].revents & POLLIN)
 			break;
 
-		if (ba_dbus_connection_poll_dispatch(&config.dbus_ctx, &fds[1], nfds))
+		if (ba_dbus_connection_poll_dispatch(&config.dbus_ctx, &fds[1], dbus_fds))
 			while (dbus_connection_dispatch(config.dbus_ctx.conn) == DBUS_DISPATCH_DATA_REMAINS)
 				continue;
 
+		if (alsa_mixer_is_open())
+			alsa_mixer_handle_events();
 	}
 
 	io_worker_cleanup();
