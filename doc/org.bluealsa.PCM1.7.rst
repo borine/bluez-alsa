@@ -151,6 +151,16 @@ array{byte} CodecConfiguration [readonly]
     available only for transports which support codec configuration
     (e.g. A2DP).
 
+boolean Reconfigurable [readwrite]
+    Optional. Available only for transports which support codec configuration.
+    Indicates that the CodecConfiguration negotiated when the Profile is
+    connected can be modified after connection. The value is initially true.
+    Since Bluez release 5.80, Bluez is unable to modify the CodecConfiguration
+    for some remote devices, resulting in disconnection of the Profile.
+    A client can set this property to false for such devices, and if so then
+    it will be set to false for all future transport connections of the same
+    transport type on the same device.
+
 uint16 Delay [readonly]
     Approximate PCM delay in 1/10 of millisecond.
 

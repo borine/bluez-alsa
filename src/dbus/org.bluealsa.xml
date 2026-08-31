@@ -31,6 +31,7 @@ SPDX-License-Identifier: MIT
 		<property name="Rate" type="u" access="read" />
 		<property name="Codec" type="s" access="read" />
 		<property name="CodecConfiguration" type="ay" access="read" />
+		<property name="Reconfigurable" type="b" access="readwrite" />
 		<property name="Delay" type="q" access="read" />
 		<property name="ClientDelay" type="n" access="readwrite" />
 		<property name="SoftVolume" type="b" access="readwrite" />
