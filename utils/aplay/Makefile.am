@@ -13,6 +13,7 @@ bluealsa_aplay_SOURCES = \
 	dbus.c \
 	delay-report.c \
 	io-worker.c \
+	io-worker-output.c \
 	single-playback.c \
 	aplay.c
 

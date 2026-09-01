@@ -84,4 +84,3 @@ void single_playback_reset(single_playback_t *sp) {
 		sp->pause_retries = 0;
 	single_playback_unlock(sp);
 }
-
