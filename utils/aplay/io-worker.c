@@ -24,6 +24,7 @@
 #include "shared/defs.h"
 #include "shared/ffb.h"
 #include "shared/log.h"
+#include "single-playback.h"
 #if WITH_LIBSAMPLERATE
 # include "resampler.h"
 #endif
@@ -52,8 +53,6 @@ typedef struct {
 static pthread_rwlock_t workers_lock = PTHREAD_RWLOCK_INITIALIZER;
 static io_worker_t *workers[16] = { NULL };
 static size_t workers_size = ARRAYSIZE(workers);
-
-static pthread_mutex_t single_playback_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* local PCM muted state for software mute */
 static bool pcm_muted = false;
@@ -90,37 +89,6 @@ static io_worker_t *get_active_io_worker(void) {
 	pthread_rwlock_unlock(&workers_lock);
 
 	return w;
-}
-
-static int pause_device_player(const struct ba_pcm *ba_pcm) {
-
-	DBusMessage *msg = NULL, *rep = NULL;
-	DBusError err = DBUS_ERROR_INIT;
-	char path[160];
-	int ret = 0;
-
-	snprintf(path, sizeof(path), "%s/player0", ba_pcm->device_path);
-	msg = dbus_message_new_method_call("org.bluez", path, "org.bluez.MediaPlayer1", "Pause");
-
-	if ((rep = dbus_connection_send_with_reply_and_block(config.dbus_ctx.conn, msg,
-					DBUS_TIMEOUT_USE_DEFAULT, &err)) == NULL) {
-		warn("Couldn't pause player: %s", err.message);
-		dbus_error_free(&err);
-		goto fail;
-	}
-
-	debug("Requested playback pause");
-	goto final;
-
-fail:
-	ret = -1;
-
-final:
-	if (msg != NULL)
-		dbus_message_unref(msg);
-	if (rep != NULL)
-		dbus_message_unref(rep);
-	return ret;
 }
 
 static bool pcm_hw_params_equal(
@@ -242,6 +210,8 @@ static void *io_worker_routine(io_worker_t *w) {
 	/* Alternative format that can be generated internally by the resampler.
 	 * This is only used if the resampler is enabled. */
 	snd_pcm_format_t format_2 = SND_PCM_FORMAT_UNKNOWN;
+	/* For managing the single-playback mode. */
+	single_playback_t sp;
 
 #if WITH_LIBSAMPLERATE
 	/* The resampler requires the native endian format for the input data. */
@@ -325,8 +295,9 @@ static void *io_worker_routine(io_worker_t *w) {
 	}
 #endif
 
-	/* Track the lock state of the single playback mutex within this thread. */
-	bool single_playback_mutex_locked = false;
+	/* In order not to flood BT connection with AVRCP packets when in single
+	 * playback mode, we are going to send pause command every 0.5 second. */
+	single_playback_init(&sp, w->ba_pcm.device_path, pcm_1s_samples / 2);
 
 	/* Intervals in seconds between consecutive PCM open retry attempts. */
 	const unsigned int pcm_open_retry_intervals[] = { 1, 1, 2, 3, 5 };
@@ -336,18 +307,12 @@ static void *io_worker_routine(io_worker_t *w) {
 	struct delay_report dr;
 	delay_report_init(&dr, &config.dbus_ctx, &w->ba_pcm);
 
-	size_t pause_retry_pcm_samples = pcm_1s_samples;
-	size_t pause_retries = 0;
-
 	int timeout = -1;
 
 	debug("Starting IO loop");
 	for (;;) {
 
-		if (single_playback_mutex_locked) {
-			pthread_mutex_unlock(&single_playback_mutex);
-			single_playback_mutex_locked = false;
-		}
+		single_playback_unlock(&sp);
 
 		struct pollfd fds[16] = {
 			{ config.main_loop_quit_event_fd, POLLIN, 0 },
@@ -456,21 +421,10 @@ static void *io_worker_routine(io_worker_t *w) {
 			 * mutex. It is required to lock it, because the active state is changed
 			 * in the worker thread after opening the PCM device, so we have to
 			 * synchronize all threads at this point. */
-			pthread_mutex_lock(&single_playback_mutex);
-			single_playback_mutex_locked = true;
+			single_playback_lock(&sp);
 
 			if (get_active_io_worker() != NULL) {
-				/* In order not to flood BT connection with AVRCP packets,
-				 * we are going to send pause command every 0.5 second. */
-				if (pause_retries < 5 &&
-						(pause_retry_pcm_samples += read_samples) > pcm_1s_samples / 2) {
-					if (pause_device_player(&w->ba_pcm) == -1)
-						/* pause command does not work, stop further requests */
-						pause_retries = 5;
-					pause_retry_pcm_samples = 0;
-					pause_retries++;
-					timeout = 100;
-				}
+				single_playback_pause(&sp, read_samples);
 				continue;
 			}
 
@@ -551,6 +505,7 @@ static void *io_worker_routine(io_worker_t *w) {
 								w->alsa_pcm.start_threshold,
 								w->alsa_pcm.start_threshold + w->alsa_pcm.period_frames)) == -1) {
 					error("Couldn't initialize resampler: %s", strerror(errno));
+					single_playback_unlock(&sp);
 					goto fail;
 				}
 
@@ -624,12 +579,10 @@ static void *io_worker_routine(io_worker_t *w) {
 		/* Mark device as active. */
 		w->active = true;
 
-		/* Current worker was marked as active, so we can safely
-		 * release the single playback mutex if it was locked. */
-		if (single_playback_mutex_locked) {
-			pthread_mutex_unlock(&single_playback_mutex);
-			single_playback_mutex_locked = false;
-		}
+		/* Current worker was marked as active, so we can safely release the
+		 * single playback mutex if it was locked and reset the single
+		 * playback state. */
+		single_playback_reset(&sp);
 
 		if (!w->alsa_mixer.has_mute_switch && pcm_muted) {
 			snd_pcm_format_t format = w->alsa_pcm.format;
@@ -706,8 +659,6 @@ static void *io_worker_routine(io_worker_t *w) {
 
 device_inactive:
 		debug("BT device marked as inactive: %s", w->addr);
-		pause_retry_pcm_samples = pcm_1s_samples;
-		pause_retries = 0;
 		timeout = -1;
 
 close_alsa:

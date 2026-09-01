@@ -1,5 +1,5 @@
 # BlueALSA - Makefile.am
-# SPDX-FileCopyrightText: 2016-2025 BlueALSA developers
+# SPDX-FileCopyrightText: 2016-2026 BlueALSA developers
 # SPDX-License-Identifier: MIT
 
 if ENABLE_APLAY
@@ -13,6 +13,7 @@ bluealsa_aplay_SOURCES = \
 	dbus.c \
 	delay-report.c \
 	io-worker.c \
+	single-playback.c \
 	aplay.c
 
 if WITH_LIBSAMPLERATE
