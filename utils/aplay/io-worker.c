@@ -20,6 +20,7 @@
 #include "alsa-mixer.h"
 #include "aplay-config.h"
 #include "delay-report.h"
+#include "io-worker-input.h"
 #include "io-worker-output.h"
 #include "shared/dbus-client-pcm.h"
 #include "shared/defs.h"
@@ -52,24 +53,6 @@ static size_t workers_size = ARRAYSIZE(workers);
 
 /* local PCM muted state for software mute */
 static bool pcm_muted = false;
-
-static snd_pcm_format_t bluealsa_get_snd_pcm_format(const struct ba_pcm *pcm) {
-	switch (pcm->format) {
-	case 0x0108:
-		return SND_PCM_FORMAT_U8;
-	case 0x8210:
-		return SND_PCM_FORMAT_S16_LE;
-	case 0x8318:
-		return SND_PCM_FORMAT_S24_3LE;
-	case 0x8418:
-		return SND_PCM_FORMAT_S24_LE;
-	case 0x8420:
-		return SND_PCM_FORMAT_S32_LE;
-	default:
-		error("Unknown PCM format: %#x", pcm->format);
-		return SND_PCM_FORMAT_UNKNOWN;
-	}
-}
 
 static io_worker_t *get_active_io_worker(void) {
 
@@ -151,6 +134,35 @@ static snd_pcm_uframes_t io_worker_playback_delay(
 	return delay;
 }
 
+void io_worker_print_config(
+			const io_worker_t *w,
+			const io_worker_input_t *input,
+			const io_worker_output_t *output) {
+
+	info("Used configuration for %s:\n"
+			"  BlueALSA PCM format: %s\n"
+			"  BlueALSA PCM sample rate: %u Hz\n"
+			"  BlueALSA PCM channels: %u\n"
+			"  ALSA PCM buffer time: %u us (%zu bytes)\n"
+			"  ALSA PCM period time: %u us (%zu bytes)\n"
+			"  ALSA PCM format: %s\n"
+			"  ALSA PCM sample rate: %u Hz\n"
+			"  ALSA PCM channels: %u\n"
+			"  ALSA mixer volume mapping: %s",
+			w->addr,
+			snd_pcm_format_name(input->pcm_format),
+			w->ba_pcm.rate,
+			w->ba_pcm.channels,
+			output->pcm.buffer_time, alsa_pcm_frames_to_bytes(&output->pcm, output->pcm.buffer_frames),
+			output->pcm.period_time, alsa_pcm_frames_to_bytes(&output->pcm, output->pcm.period_frames),
+			snd_pcm_format_name(output->pcm.format),
+			output->pcm.rate,
+			output->pcm.channels,
+			w->alsa_mixer.mixer ? (w->alsa_mixer.has_db_scale ? "dB scale" : "linear") : "none");
+	if (config.verbose >= 3)
+		alsa_pcm_dump(&output->pcm, stderr);
+}
+
 /**
  * @return > 0 try again after timeout
  *           0 ok to write output
@@ -168,6 +180,7 @@ static int io_worker_active_check(io_worker_t *w,
 						ffb_t *read_buffer,
 						size_t input_samples) {
 
+	errno = 0;
 	if (!w->active) {
 
 		/* Before checking active worker, we need to lock the single playback
@@ -196,6 +209,8 @@ static int io_worker_active_check(io_worker_t *w,
 
 		/* Mark device as active. */
 		w->active = true;
+		single_playback_reset(sp);
+		debug("BT device marked as active: %s", w->addr);
 
 		/* Skip mixer setup in case of software volume. */
 		if (config.mixer_device != NULL && !w->ba_pcm.soft_volume) {
@@ -214,10 +229,6 @@ static int io_worker_active_check(io_worker_t *w,
 			}
 			pthread_mutex_unlock(&w->mutex);
 		}
-
-		/* Reset moving delay window buffer. */
-		delay_report_reset(&dr);
-
 	}
 
 finish:
@@ -225,17 +236,180 @@ finish:
 	return timeout;
 }
 
+static int io_worker_do_output(
+				io_worker_t *w,
+				io_worker_input_t *input,
+				io_worker_output_t *output,
+				struct delay_report *dr,
+				size_t read_samples,
+				bool drain) {
+
+	const bool force_mute = (!w->alsa_mixer.has_mute_switch && pcm_muted);
+	int timeout;
+
+	errno = 0;
+	if ((timeout = io_worker_output_write(output, &input->buffer, force_mute, drain)) < 0) {
+		if (errno != EAGAIN) {
+			/* Failure to write to a running PCM is not recoverable, so we
+			 * close the output. */
+			io_worker_output_close(output);
+			/* Reset moving delay window buffer. */
+			delay_report_reset(dr);
+		}
+		return -1;
+	}
+
+	if (drain) {
+		/* No need to update the delay report or resampler when the input is
+		* finished. */
+		return -1;
+	}
+
+	DBusError err = DBUS_ERROR_INIT;
+	const snd_pcm_uframes_t delay_frames = io_worker_playback_delay(w, output, &input->buffer);
+	if (!delay_report_update(dr, delay_frames, &err)) {
+		if (config.verbose >= 3)
+			warn("Couldn't update BlueALSA PCM client delay: %s", err.message);
+		dbus_error_free(&err);
+	}
+
+	io_worker_output_update_rate(output, read_samples / w->ba_pcm.channels, dr->avg_value);
+
+	return timeout;
+}
+
+static void io_worker_event_loop(
+				io_worker_t *w,
+				io_worker_input_t *input,
+				io_worker_output_t *output,
+				single_playback_t *sp,
+				struct delay_report *dr) {
+
+	struct pollfd fds[16] = {
+		{ config.main_loop_quit_event_fd, POLLIN, 0 },
+		{ input->ba_pcm_fd, POLLIN, 0 }};
+
+	int timeout = -1;
+	bool config_printed = false;
+
+	for (;;) {
+		nfds_t nfds = 2;
+
+		if (alsa_mixer_is_open(&w->alsa_mixer)) {
+			nfds += alsa_mixer_poll_descriptors_count(&w->alsa_mixer);
+			if (nfds <= ARRAYSIZE(fds))
+				alsa_mixer_poll_descriptors(&w->alsa_mixer, fds + 2, nfds - 2);
+			else {
+				error("Poll FD array size exceeded: %zu > %zu", (size_t)nfds, ARRAYSIZE(fds));
+				/* Terminate the worker thread if it cannot poll all events. */
+				break;
+			}
+		}
+
+		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+		int poll_rv = poll(fds, nfds, timeout);
+		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+		if (poll_rv == -1) {
+			if (errno == EINTR)
+				continue;
+			/* The worker thread cannot recover from a poll() failure */
+			error("IO loop poll error: %s", strerror(errno));
+			break;
+		}
+
+		if (fds[0].revents & POLLIN)
+			/* Process terminated by user */
+			break;
+
+		pthread_mutex_lock(&w->mutex);
+		/* Check the PCM running status on every iteration. */
+		bool ba_pcm_running = w->ba_pcm.running;
+		pthread_mutex_unlock(&w->mutex);
+
+		if (poll_rv == 0) {
+			/* Timeout. If the ALSA PCM is not already stopped, then allow it
+			 * to process any remaining samples in the buffers. If the source
+			 * has stopped running then block until ALSA has drained all
+			 * remaining samples from the buffers. */
+			if (io_worker_output_is_running(output)) {
+				timeout = io_worker_do_output(w, input, output, dr, 0, !ba_pcm_running);
+				if (timeout > 0)
+					continue;
+			}
+
+			timeout = -1;
+
+			if (w->active && ba_pcm_running) {
+				/* The BT device is in the running state, but is not sending
+				 * audio frames. As there is no work for the ALSA device to do
+				 * we simply wait for more audio to arrive from the server. */
+				continue;
+			}
+
+			if (!ba_pcm_running)
+				debug("BT device marked as inactive: %s", w->addr);
+
+			io_worker_output_close(output);
+			single_playback_reset(sp);
+			delay_report_reset(dr);
+			pthread_mutex_lock(&w->mutex);
+			alsa_mixer_close(&w->alsa_mixer);
+			pthread_mutex_unlock(&w->mutex);
+			w->active = !config.force_single_playback;
+			continue;
+		}
+
+		ssize_t read_samples = 0;
+		if (fds[1].revents & POLLIN) {
+			if ((read_samples = io_worker_input_read(input, !w->active, output->use_resampler)) == -1)
+				break;
+
+			if (read_samples == 0 && !io_worker_output_is_running(output)) {
+				debug("BlueALSA source PCM has disconnected");
+				break;
+			}
+		}
+
+		/* A mixer event may have pre-empted a timeout set by the output, so
+		 * to be sure we do not miss an ALSA PCM deadline we must invoke an
+		 * output iteration even if there is no new input, before calling
+		 * poll() again */
+		if ((timeout = io_worker_active_check(w, output, sp, &input->buffer, read_samples)) == -1 && errno != EAGAIN)
+			break;
+
+		if (timeout != 0)
+			continue;
+
+		/* On the first iteration after opening the output print the setup. */
+		if (config.verbose >= 2 && !config_printed) {
+			single_playback_lock(sp);
+			io_worker_print_config(w, input, output);
+			single_playback_unlock(sp);
+			config_printed = true;
+		}
+
+		/* Write samples to the output */
+		timeout = io_worker_do_output(w, input, output, dr, 0, !ba_pcm_running);
+		if (timeout < 0 && errno != EAGAIN) {
+			/* When the output has failed, suspend processing of mixer events
+			 * until the output has been re-opened */
+			pthread_mutex_lock(&w->mutex);
+			alsa_mixer_close(&w->alsa_mixer);
+			pthread_mutex_unlock(&w->mutex);
+		}
+
+		/* Mixer events are lower priority than PCM events, so process these
+		 * only after PCM I/O has been dealt with. */
+		if (alsa_mixer_is_open(&w->alsa_mixer))
+			alsa_mixer_handle_events(&w->alsa_mixer);
+
+	}
+}
+
 static void io_worker_routine_exit(io_worker_t *w) {
 
 	pthread_mutex_lock(&w->mutex);
-
-	if (w->ba_pcm_ctrl_fd != -1) {
-		close(w->ba_pcm_ctrl_fd);
-		w->ba_pcm_ctrl_fd = -1;
-	}
-
 	alsa_mixer_close(&w->alsa_mixer);
-
 	debug("Exiting IO worker %s", w->addr);
 	pthread_mutex_unlock(&w->mutex);
 
@@ -243,30 +417,20 @@ static void io_worker_routine_exit(io_worker_t *w) {
 
 static void *io_worker_routine(io_worker_t *w) {
 
-	const snd_pcm_format_t pcm_format = bluealsa_get_snd_pcm_format(&w->ba_pcm);
-	const ssize_t pcm_format_size = snd_pcm_format_size(pcm_format, 1);
 	const size_t pcm_1s_samples = w->ba_pcm.rate * w->ba_pcm.channels;
-	/* Buffer for audio frames read from the BlueALSA server. */
-	ffb_t read_buffer = { 0 };
+
+	io_worker_input_t input = { 0 };
 	io_worker_output_t output = { 0 };
 	single_playback_t sp;
+	struct delay_report dr;
 
 	/* Cancellation should be possible only in the carefully selected place
-	 * in order to prevent memory leaks and resources not being released. */
+	* in order to prevent memory leaks and resources not being released. */
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
 	pthread_cleanup_push(PTHREAD_CLEANUP(io_worker_routine_exit), w);
-	pthread_cleanup_push(PTHREAD_CLEANUP(ffb_free), &read_buffer);
-	pthread_cleanup_push(PTHREAD_CLEANUP(io_worker_output_free), &output);
-
-	/* Create a buffer big enough to hold enough PCM data for three periods.
-	 * This will be later be revised if necessary to match the actual ALSA
-	 * start threshold when the ALSA PCM is opened. */
-	const size_t nmemb = ((size_t)config.pcm_period_time * 3 / 1000) * (pcm_1s_samples / 1000);
-	if (ffb_init(&read_buffer, nmemb, pcm_format_size) == -1) {
-		error("Couldn't create PCM buffer: %s", strerror(errno));
-		goto fail;
-	}
+	pthread_cleanup_push(PTHREAD_CLEANUP(io_worker_input_close), &input);
+	pthread_cleanup_push(PTHREAD_CLEANUP(io_worker_output_close), &output);
 
 	DBusError err = DBUS_ERROR_INIT;
 
@@ -274,7 +438,7 @@ static void *io_worker_routine(io_worker_t *w) {
 	if (config.volume_type != VOL_TYPE_AUTO) {
 		bool softvol = (config.volume_type == VOL_TYPE_SOFTWARE);
 		debug("Setting BlueALSA source PCM volume mode: %s: %s",
-				w->ba_pcm.pcm_path, softvol ? "software" : "pass-through");
+		w->ba_pcm.pcm_path, softvol ? "software" : "pass-through");
 		if (softvol != w->ba_pcm.soft_volume) {
 			w->ba_pcm.soft_volume = softvol;
 			if (!ba_dbus_pcm_update(&config.dbus_ctx, &w->ba_pcm, BLUEALSA_PCM_SOFT_VOLUME, &err)) {
@@ -285,201 +449,25 @@ static void *io_worker_routine(io_worker_t *w) {
 		}
 	}
 
-	debug("Opening BlueALSA source PCM: %s", w->ba_pcm.pcm_path);
-	if (!ba_dbus_pcm_open(&config.dbus_ctx, w->ba_pcm.pcm_path,
-				&w->ba_pcm_fd, &w->ba_pcm_ctrl_fd, &err)) {
-		error("Couldn't open BlueALSA source PCM: %s", err.message);
-		dbus_error_free(&err);
+	if (!io_worker_input_init(&input, &w->ba_pcm))
 		goto fail;
-	}
 
-	if (!io_worker_output_init(&output, pcm_format, w->ba_pcm.channels,
-								w->ba_pcm.rate)) {
+	if (!io_worker_output_init(&output, input.pcm_format, w->ba_pcm.channels, w->ba_pcm.rate))
 		goto fail;
-	}
 
+	/* In order not to flood BT connection with AVRCP packets, we are limit
+	 * sending of pause command in single playback mode to every 0.5 second. */
 	single_playback_init(&sp, w->ba_pcm.device_path, pcm_1s_samples / 2);
 
-	struct delay_report dr;
 	delay_report_init(&dr, &config.dbus_ctx, &w->ba_pcm);
 
-	int timeout = -1;
-
-	bool config_printed = false;
-
 	debug("Starting IO loop");
-	for (;;) {
-
-		struct pollfd fds[16] = {
-			{ config.main_loop_quit_event_fd, POLLIN, 0 },
-			{ w->ba_pcm_fd, POLLIN, 0 }};
-		nfds_t nfds = 2;
-
-		if (alsa_mixer_is_open(&w->alsa_mixer)) {
-			nfds += alsa_mixer_poll_descriptors_count(&w->alsa_mixer);
-			if (nfds <= ARRAYSIZE(fds))
-				alsa_mixer_poll_descriptors(&w->alsa_mixer, fds + 2, nfds - 2);
-			else {
-				error("Poll FD array size exceeded: %zu > %zu", (size_t)nfds, ARRAYSIZE(fds));
-				goto fail;
-			}
-		}
-
-		/* Reading from the FIFO won't block unless there is an open connection
-		 * on the writing side. However, the server does not open PCM FIFO until
-		 * a transport is created. With the A2DP, the transport is created when
-		 * some clients (BT device) requests audio transfer. */
-
-		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-		int poll_rv = poll(fds, nfds, timeout);
-		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-
-		pthread_mutex_lock(&w->mutex);
-		/* Check the PCM running status on every iteration. */
-		bool ba_pcm_running = w->ba_pcm.running;
-		pthread_mutex_unlock(&w->mutex);
-
-		if (poll_rv == -1) {
-			if (errno == EINTR)
-				continue;
-			error("IO loop poll error: %s", strerror(errno));
-			goto fail;
-		}
-
-		if (poll_rv == 0 &&
-				ba_pcm_running &&
-				w->active &&
-				ffb_blen_out(&read_buffer) == 0 &&
-				!alsa_pcm_is_running(&output.pcm)) {
-			/* The BT device is in the running state, but is not sending audio
-			 * frames. As there is no work for the ALSA device to do we simply
-			 * wait for more audio to arrive from the server. */
-			timeout = -1;
-			continue;
-		}
-
-		if (fds[0].revents & POLLIN)
-			break;
-
-		if (alsa_mixer_is_open(&w->alsa_mixer))
-			alsa_mixer_handle_events(&w->alsa_mixer);
-
-		size_t read_samples = 0;
-		if (fds[1].revents & POLLIN) {
-
-			/* If the read buffer is full then we have an overrun. We must
-			 * discard audio frames in order to continue reading fresh data
-			 * from the server. */
-			if (ffb_blen_in(&read_buffer) == 0) {
-				unsigned int buffered = 0;
-				ioctl(w->ba_pcm_fd, FIONREAD, &buffered);
-				const size_t discard_bytes = MIN(buffered, ffb_blen_out(&read_buffer));
-				const size_t discard_samples = discard_bytes / pcm_format_size;
-				ffb_shift(&read_buffer, discard_samples);
-				if (io_worker_output_is_open(&output))
-					warn("Dropping PCM frames: %zu", discard_samples / w->ba_pcm.channels);
-			}
-
-			ssize_t ret;
-			if ((ret = read(w->ba_pcm_fd, read_buffer.tail, ffb_blen_in(&read_buffer))) == -1) {
-				if (errno == EINTR)
-					continue;
-				error("BlueALSA source PCM read error: %s", strerror(errno));
-				goto fail;
-			}
-
-			read_samples = ret / pcm_format_size;
-			if (ret % pcm_format_size != 0)
-				warn("Invalid read from BlueALSA source PCM: %zd %% %zd != 0", ret, pcm_format_size);
-
-			io_worker_output_fix_endianness(&output, read_buffer.tail, read_samples, pcm_format);
-			ffb_seek(&read_buffer, read_samples);
-
-		}
-		else if (fds[1].revents & POLLHUP) {
-			/* Source PCM FIFO has been terminated on the writing side. */
-			debug("BlueALSA source PCM disconnected: %s", w->ba_pcm.pcm_path);
-			ba_pcm_running = false;
-			break;
-		}
-		else if (fds[1].revents) {
-			error("Unexpected BlueALSA source PCM poll event: %#x", fds[1].revents);
-		}
-
-		/* check whether worker is active and alsa pcm is open */
-		if ((timeout = io_worker_active_check(w, &output, &sp, &read_buffer, read_samples)) == -1 &&
-				errno != EAGAIN)
-				goto fail;
-
-		if (timeout != 0)
-			continue;
-
-		if (config.verbose >= 2 && !config_printed) {
-			single_playback_lock(&sp);
-			info("Used configuration for %s:\n"
-					"  BlueALSA PCM format: %s\n"
-					"  BlueALSA PCM sample rate: %u Hz\n"
-					"  BlueALSA PCM channels: %u\n"
-					"  ALSA PCM buffer time: %u us (%zu bytes)\n"
-					"  ALSA PCM period time: %u us (%zu bytes)\n"
-					"  ALSA PCM format: %s\n"
-					"  ALSA PCM sample rate: %u Hz\n"
-					"  ALSA PCM channels: %u\n"
-					"  ALSA mixer volume mapping: %s",
-					w->addr,
-					snd_pcm_format_name(pcm_format),
-					w->ba_pcm.rate,
-					w->ba_pcm.channels,
-					output.pcm.buffer_time, alsa_pcm_frames_to_bytes(&output.pcm, output.pcm.buffer_frames),
-					output.pcm.period_time, alsa_pcm_frames_to_bytes(&output.pcm, output.pcm.period_frames),
-					snd_pcm_format_name(output.pcm.format),
-					output.pcm.rate,
-					output.pcm.channels,
-					w->alsa_mixer.mixer ? (w->alsa_mixer.has_db_scale ? "dB scale" : "linear") : "none");
-			if (config.verbose >= 3)
-				alsa_pcm_dump(&output.pcm, stderr);
-			single_playback_unlock(&sp);
-			config_printed = true;
-		}
-
-		const bool force_mute = (!w->alsa_mixer.has_mute_switch && pcm_muted);
-		if ((timeout = io_worker_output_write(&output, &read_buffer, force_mute, !ba_pcm_running)) < 0) {
-			if (alsa_pcm_is_running(&output.pcm))
-				goto close_output;
-		}
-
-		if (!ba_pcm_running)
-			goto device_inactive;
-
-		const snd_pcm_uframes_t delay_frames = io_worker_playback_delay(w, &output, &read_buffer);
-		if (!delay_report_update(&dr, delay_frames, &err)) {
-			error("Couldn't update BlueALSA PCM client delay: %s", err.message);
-			dbus_error_free(&err);
-			goto fail;
-		}
-
-		io_worker_output_update_rate(&output, read_samples / w->ba_pcm.channels, dr.avg_value);
-
-		continue;
-
-device_inactive:
-		debug("BT device marked as inactive: %s", w->addr);
-		timeout = -1;
-
-close_output:
-		ffb_rewind(&read_buffer);
-		io_worker_output_free(&output);
-		pthread_mutex_lock(&w->mutex);
-		alsa_mixer_close(&w->alsa_mixer);
-		pthread_mutex_unlock(&w->mutex);
-
-		w->active = !config.force_single_playback;
-	}
+	io_worker_event_loop(w, &input, &output, &sp, &dr);
 
 fail:
-	pthread_cleanup_pop(1);
-	pthread_cleanup_pop(1);
-	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);  /* io_worker_output_close() */
+	pthread_cleanup_pop(1);  /* io_worker_input_close()  */
+	pthread_cleanup_pop(1);  /* io_worker_routine_exit() */
 	return NULL;
 }
 

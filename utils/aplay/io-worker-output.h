@@ -1,6 +1,6 @@
 /*
  * BlueALSA - io-worker-output.h
- * SPDX-FileCopyrightText: 2026 BlueALSA developers
+ * SPDX-FileCopyrightText: 2016-2026 BlueALSA developers
  * SPDX-License-Identifier: MIT
  */
 
@@ -39,6 +39,7 @@ typedef struct {
 	unsigned int channels;
 	unsigned int in_rate;
 	int pcm_flags;
+	bool use_resampler;
 #if WITH_LIBSAMPLERATE
 	struct resampler resampler;
 	snd_pcm_format_t resampler_format;
@@ -46,7 +47,6 @@ typedef struct {
 	/* For detecting when the ALSA device has auto-started after reaching its
 	 * start threshold. */
 	bool alsa_pcm_started;
-	bool use_resampler;
 #endif
 } io_worker_output_t;
 

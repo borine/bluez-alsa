@@ -1,6 +1,6 @@
 /*
  * BlueALSA - io-worker-output.c
- * SPDX-FileCopyrightText: 2026 BlueALSA developers
+ * SPDX-FileCopyrightText: 2016-2026 BlueALSA developers
  * SPDX-License-Identifier: MIT
  */
 
@@ -34,6 +34,7 @@ bool io_worker_output_init(
 	output->channels = channels;
 	output->in_rate = input_rate;
 	output->pcm_flags = 0;
+	output->use_resampler = false;
 
 #if WITH_LIBSAMPLERATE
 	memset(&output->resampler, 0, sizeof(output->resampler));
@@ -42,7 +43,6 @@ bool io_worker_output_init(
 	memset(&output->resampled_buffer, 0, sizeof(output->resampled_buffer));
 
 	output->alsa_pcm_started = false;
-	output->use_resampler = false;
 
 	if (config.resampler_method != RESAMPLER_CONV_NONE) {
 		if (!resampler_is_input_format_supported(input_format))
@@ -69,7 +69,7 @@ bool io_worker_output_init(
 	return true;
 }
 
-void io_worker_output_free(io_worker_output_t *output) {
+void io_worker_output_close(io_worker_output_t *output) {
 	debug("Closing ALSA playback PCM");
 	alsa_pcm_close(&output->pcm);
 #if WITH_LIBSAMPLERATE
@@ -191,40 +191,48 @@ int io_worker_output_write(io_worker_output_t *output,
 					bool mute,
 					bool drain) {
 
-		int timeout = -1;
+	/* Here we use errno to distinguish whether a return value of -1 indicates
+	 * failure or simply a infinite timeout; so we initialize it to zero. */
+	errno = 0;
 
-		if (mute) {
-			snd_pcm_format_t format = output->pcm.format;
+	if (mute) {
+		snd_pcm_format_t format = output->pcm.format;
 #if WITH_LIBSAMPLERATE
-			if (output->use_resampler)
-				format = output->resampler_format;
+		if (output->use_resampler)
+			format = output->resampler_format;
 #endif
-			snd_pcm_format_set_silence(format, input_buffer->data, ffb_len_out(input_buffer));
-		}
+		snd_pcm_format_set_silence(format, input_buffer->data, ffb_len_out(input_buffer));
+	}
 
 #if WITH_LIBSAMPLERATE
-		if (output->use_resampler &&
-				resampler_process(&output->resampler, input_buffer, &output->resampled_buffer) != 0)
-			goto fail;
+	if (output->use_resampler &&
+			resampler_process(&output->resampler, input_buffer, &output->resampled_buffer) != 0)
+		return -1;
 #endif
 
-		if (alsa_pcm_write(&output->pcm, output->write_buffer, drain) < 0)
-			goto fail;
+	if (alsa_pcm_write(&output->pcm, output->write_buffer, drain) < 0)
+		return -1;
 
-		/* Set the poll() timeout such that this thread is always woken before
-		 * an ALSA underrun can occur. */
-		if (alsa_pcm_is_running(&output->pcm)) {
-			timeout = 1000 * output->pcm.hw_avail / output->pcm.rate;
-			/* poll() timeouts may be late because of the kernel scheduler and
-			 * workload, and there may be additional processing delays before
-			 * we can write to the ALSA PCM again. So we allow for this by setting
-			 * the timeout value 5ms before the underrun deadline. */
-			if ((timeout -= 5) < 0)
-				timeout = 0;
-		}
-
-fail:
+	/* Set the poll() timeout such that this thread is always woken before
+	 * an ALSA underrun can occur. */
+	int timeout;
+	if (alsa_pcm_is_running(&output->pcm)) {
+		timeout = 1000 * output->pcm.hw_avail / output->pcm.rate;
+		/* poll() timeouts may be late because of the kernel scheduler and
+		 * workload, and there may be additional processing delays before
+		 * we can write to the ALSA PCM again. So we allow for this by setting
+		 * the timeout value 5ms before the underrun deadline. */
+		if ((timeout -= 5) < 0)
+			timeout = 0;
+	}
+	else {
+		/* When the ALSA PCM has not yet started then we request an infinite
+		 * timeout. To distinguish this from a failed write we use EAGAIN. */
+		errno = EAGAIN;
+		timeout = -1;
+	}
 	return timeout;
+
 }
 
 snd_pcm_uframes_t io_worker_output_delay(
@@ -244,9 +252,9 @@ snd_pcm_uframes_t io_worker_output_delay(
 	return delay;
 }
 
+#if WITH_LIBSAMPLERATE
 void io_worker_output_update_rate(io_worker_output_t *output,
 					size_t frames_read, size_t delay) {
-#if WITH_LIBSAMPLERATE
 	if (output->use_resampler) {
 		bool rate_changed = false;
 		if (output->pcm.underrun) {
@@ -271,9 +279,12 @@ void io_worker_output_update_rate(io_worker_output_t *output,
 			debug("PCM sample rate conversion: %u Hz -> %#.2f Hz", output->in_rate,
 					output->in_rate * resampler_current_rate_ratio(&output->resampler));
 	}
+}
 #else
+void io_worker_output_update_rate(io_worker_output_t *output,
+					size_t frames_read, size_t delay) {
 	(void) output;
 	(void) frames_read;
 	(void) delay;
-#endif
 }
+#endif
