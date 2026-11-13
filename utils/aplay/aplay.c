@@ -1219,7 +1219,7 @@ void io_worker_update_player_path(const char * device_path, struct media_control
 			memcpy(&workers[i]->mc, mc, sizeof(workers[i]->mc));
 			pthread_mutex_unlock(&workers[i]->mutex);
 			debug("Updated player for %s: %s", workers[i]->addr,
-			      mc->connected ? mc->player_path: "NONE");
+			      mc->connected ? mc->player_path : "NONE");
 		}
 	pthread_rwlock_unlock(&workers_lock);
 }
