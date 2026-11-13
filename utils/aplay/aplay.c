@@ -1064,7 +1064,8 @@ static struct io_worker * supervise_io_worker_start(const struct ba_pcm * ba_pcm
 
 	if (force_single_playback && media_control_pcm_is_media(ba_pcm)) {
 		media_control_init(&worker->mc, worker->ba_pcm.device_path, dbus_ctx.conn);
-		debug("Initial player for %s: %s", worker->addr, worker->mc.connected ? worker->mc.player_path : "NONE");
+		debug("Initial player for %s: %s", worker->addr,
+		      worker->mc.connected ? worker->mc.player_path : "NONE");
 	}
 
 	debug("Starting IO worker %s", worker->addr);
@@ -1208,24 +1209,25 @@ fail:
 	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
-void io_worker_update_player_path(const char *device_path, struct media_control * mc) {
+void io_worker_update_player_path(const char * device_path, struct media_control * mc) {
 	pthread_rwlock_rdlock(&workers_lock);
 	for (size_t i = 0; i < workers_size; i++)
 		if (workers[i] &&
-				strcmp(workers[i]->ba_pcm.device_path, device_path) == 0 &&
-				media_control_pcm_is_media(&workers[i]->ba_pcm)) {
+		    strcmp(workers[i]->ba_pcm.device_path, device_path) == 0 &&
+		    media_control_pcm_is_media(&workers[i]->ba_pcm)) {
 			pthread_mutex_lock(&workers[i]->mutex);
 			memcpy(&workers[i]->mc, mc, sizeof(workers[i]->mc));
 			pthread_mutex_unlock(&workers[i]->mutex);
-			debug("Updated player for %s: %s", workers[i]->addr, mc->connected ? mc->player_path: "NONE");
+			debug("Updated player for %s: %s", workers[i]->addr,
+			      mc->connected ? mc->player_path: "NONE");
 		}
 	pthread_rwlock_unlock(&workers_lock);
 }
 
 void io_worker_update_player_status(
-			const char * player_path,
-			const char * status,
-			DBusConnection * conn) {
+		const char * player_path,
+		const char * status,
+		DBusConnection * conn) {
 	if (strcmp(status, "playing") == 0) {
 		struct io_worker * active_worker = NULL;
 		struct io_worker * this_worker = NULL;

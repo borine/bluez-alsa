@@ -32,13 +32,13 @@
 #endif
 
 extern void io_worker_update_player_path(
-			const char * device_path,
-			struct media_control * mc);
+		const char * device_path,
+		struct media_control * mc);
 
 extern void io_worker_update_player_status(
-			const char * player_path,
-			const char * status,
-			DBusConnection * conn);
+		const char * player_path,
+		const char * status,
+		DBusConnection * conn);
 
 static dbus_bool_t media_control_dbus_message_iter_get_props_cb(
 		const char * key,
@@ -51,7 +51,7 @@ static dbus_bool_t media_control_dbus_message_iter_get_props_cb(
 
 	if ((type = dbus_message_iter_get_arg_type(val)) != DBUS_TYPE_VARIANT) {
 		dbus_set_error(err, DBUS_ERROR_INVALID_SIGNATURE,
-				"Incorrect property value type: %c != %c", type, DBUS_TYPE_VARIANT);
+		               "Incorrect property value type: %c != %c", type, DBUS_TYPE_VARIANT);
 		return FALSE;
 	}
 
@@ -86,7 +86,7 @@ static dbus_bool_t media_control_dbus_message_iter_get_props_cb(
 
 fail:
 	dbus_set_error(err, DBUS_ERROR_INVALID_SIGNATURE,
-			"Incorrect variant for '%s': %c != %c", key, type, type_expected);
+	               "Incorrect variant for '%s': %c != %c", key, type, type_expected);
 	return FALSE;
 
 }
@@ -97,7 +97,7 @@ static dbus_bool_t dbus_message_iter_get_media_control_props(
 		DBusMessageIter * iter,
 		struct media_control * mc) {
 	return dbus_message_iter_dict(iter, NULL,
-			media_control_dbus_message_iter_get_props_cb, mc);
+	                              media_control_dbus_message_iter_get_props_cb, mc);
 }
 
 /**
@@ -117,7 +117,7 @@ static dbus_bool_t dbus_message_iter_get_media_player_status(
 		dbus_message_iter_next(&entry_iter);
 		dbus_message_iter_recurse(&entry_iter, &variant_iter);
 		if (strcmp(key, "Status") == 0 &&
-				dbus_message_iter_get_arg_type(&variant_iter) == DBUS_TYPE_STRING) {
+		    dbus_message_iter_get_arg_type(&variant_iter) == DBUS_TYPE_STRING) {
 			dbus_message_iter_get_basic(&variant_iter, &val);
 			break;
 		}
@@ -130,9 +130,9 @@ static dbus_bool_t dbus_message_iter_get_media_player_status(
 }
 
 static DBusHandlerResult media_control_dbus_signal_handler(
-			DBusConnection * conn,
-			DBusMessage * message,
-			void * data) {
+		DBusConnection * conn,
+		DBusMessage * message,
+		void * data) {
 	(void)data;
 
 	if (dbus_message_get_type(message) != DBUS_MESSAGE_TYPE_SIGNAL)
@@ -145,7 +145,7 @@ static DBusHandlerResult media_control_dbus_signal_handler(
 	DBusMessageIter iter;
 
 	if (!dbus_message_iter_init(message, &iter) ||
-			dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING) {
+	    dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING) {
 		error("Invalid DBus PropertiesChanged signal signature");
 		goto fail;
 	}
@@ -189,7 +189,8 @@ fail:
 
 }
 
-bool media_control_init(struct media_control * mc, const char * device_path, DBusConnection * conn) {
+bool media_control_init(struct media_control * mc, const char * device_path,
+		DBusConnection * conn) {
 
 	struct ba_dbus_ctx bluez_ctx = {
 		.conn = conn,
@@ -219,20 +220,20 @@ bool media_control_init(struct media_control * mc, const char * device_path, DBu
 
 dbus_bool_t media_control_dbus_add_signal_handler(struct ba_dbus_ctx * dbus_ctx) {
 	ba_dbus_connection_signal_match_add(
-			dbus_ctx,
-			BLUEZ_SERVICE,
-			NULL,
-			DBUS_INTERFACE_PROPERTIES,
-			"PropertiesChanged",
-			"arg0='" BLUEZ_IFACE_MEDIACONTROL "'");
+		dbus_ctx,
+		BLUEZ_SERVICE,
+		NULL,
+		DBUS_INTERFACE_PROPERTIES,
+		"PropertiesChanged",
+		"arg0='" BLUEZ_IFACE_MEDIACONTROL "'");
 
 	ba_dbus_connection_signal_match_add(
-			dbus_ctx,
-			BLUEZ_SERVICE,
-			NULL,
-			DBUS_INTERFACE_PROPERTIES,
-			"PropertiesChanged",
-			"arg0='" BLUEZ_IFACE_MEDIAPLAYER "'");
+		dbus_ctx,
+		BLUEZ_SERVICE,
+		NULL,
+		DBUS_INTERFACE_PROPERTIES,
+		"PropertiesChanged",
+		"arg0='" BLUEZ_IFACE_MEDIAPLAYER "'");
 
 	if (!dbus_connection_add_filter(dbus_ctx->conn, media_control_dbus_signal_handler, NULL, NULL)) {
 		error("Couldn't add media_control D-Bus filter");
@@ -251,7 +252,8 @@ bool media_control_pause_player(const struct media_control * mc, DBusConnection 
 	DBusError err = DBUS_ERROR_INIT;
 	bool rv = true;
 
-	msg = dbus_message_new_method_call(BLUEZ_SERVICE, mc->player_path, BLUEZ_IFACE_MEDIAPLAYER, "Pause");
+	msg = dbus_message_new_method_call(BLUEZ_SERVICE, mc->player_path, BLUEZ_IFACE_MEDIAPLAYER,
+	                                   "Pause");
 
 	if (!dbus_connection_send(conn, msg, NULL)) {
 		warn("Couldn't pause player: %s", err.message);
