@@ -30,7 +30,8 @@ static bool media_control_get_player_status(struct media_control * mc, DBusConne
 	DBusError err = DBUS_ERROR_INIT;
 	bool rv = false;
 
-	if ((rep = dbus_get_properties(conn, BLUEZ_SERVICE, mc->player_path, BLUEZ_IFACE_MEDIAPLAYER, "Status", &err)) == NULL)
+	if ((rep = dbus_get_properties(conn, BLUEZ_SERVICE, mc->player_path, BLUEZ_IFACE_MEDIAPLAYER,
+	                               "Status", &err)) == NULL)
 		goto fail;
 
 	DBusMessageIter iter;
@@ -218,7 +219,7 @@ bool media_control_init(struct media_control * mc, const char * device_path,
 		.ba_service = BLUEZ_SERVICE,
 	};
 
-	*mc = (struct media_control){ 0 };
+	*mc = (struct media_control) { 0 };
 
 	DBusError error = DBUS_ERROR_INIT;
 	dbus_bool_t rv;
@@ -276,7 +277,8 @@ bool media_control_pause_player(struct media_control * mc, DBusConnection * conn
 	DBusMessage * msg = NULL;
 	bool rv = true;
 
-	msg = dbus_message_new_method_call(BLUEZ_SERVICE, mc->player_path, BLUEZ_IFACE_MEDIAPLAYER, "Pause");
+	msg = dbus_message_new_method_call(BLUEZ_SERVICE, mc->player_path, BLUEZ_IFACE_MEDIAPLAYER,
+	                                   "Pause");
 	dbus_message_set_no_reply(msg, TRUE);
 
 	if (dbus_connection_send(conn, msg, NULL)) {

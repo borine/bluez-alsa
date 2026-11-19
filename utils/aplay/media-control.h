@@ -35,9 +35,9 @@ inline static bool media_control_pcm_is_media(const struct ba_pcm * ba_pcm) {
 }
 
 inline static bool media_control_status_is_pausable(const char * status) {
-	return (strcmp(status, "playing") == 0 ||
-		    strcmp(status, "forward-seek") == 0 ||
-	        strcmp(status, "reverse-seek") == 0);
+	return strcmp(status, "playing") == 0 ||
+	       strcmp(status, "forward-seek") == 0 ||
+	       strcmp(status, "reverse-seek") == 0;
 }
 
 bool media_control_init(struct media_control * mc, const char * device_path,

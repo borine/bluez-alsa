@@ -1069,7 +1069,7 @@ static struct io_worker * supervise_io_worker_start(const struct ba_pcm * ba_pcm
 	if (force_single_playback && media_control_pcm_is_media(ba_pcm)) {
 		media_control_init(&worker->mc, ba_pcm->device_path, dbus_ctx.conn);
 		debug("Initial player for %s: %s", worker->addr,
-			  worker->mc.connected ? worker->mc.player_path : "NONE");
+		      worker->mc.connected ? worker->mc.player_path : "NONE");
 	}
 
 	debug("Starting IO worker %s", worker->addr);
